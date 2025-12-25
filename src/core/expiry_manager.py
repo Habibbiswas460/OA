@@ -78,6 +78,7 @@ class ExpiryManager:
     def fetch_available_expiries(self, underlying: str) -> List[ExpiryInfo]:
         """
         Fetch available expiries from OpenAlgo for given underlying
+        Gracefully handles if API method is not available
         
         Args:
             underlying: NIFTY or BANKNIFTY
@@ -87,18 +88,30 @@ class ExpiryManager:
         """
         if not self.client:
             logger.error("OpenAlgo client not initialized")
-            return []
+            # Return default weekly expiries (Thursday and next Thursday)
+            return self._get_default_expiries()
         
         try:
-            # Get available options chain to determine expiries
-            response = self.client.getoptionchain(
-                exchange='NFO',
-                symbol=underlying
-            )
+            # Try to get option chain from OpenAlgo
+            # Use generic method call as getoptionchain may not be available
+            if hasattr(self.client, 'getoptionchain'):
+                response = self.client.getoptionchain(
+                    exchange='NFO',
+                    symbol=underlying
+                )
+            elif hasattr(self.client, 'get_option_chain'):
+                response = self.client.get_option_chain(
+                    exchange='NFO',
+                    symbol=underlying
+                )
+            else:
+                logger.warning(f"OpenAlgo API does not support option chain fetching")
+                # Return default expiries
+                return self._get_default_expiries()
             
             if not response:
-                logger.warning(f"No option chain data for {underlying}")
-                return []
+                logger.warning(f"No option chain data for {underlying}, using defaults")
+                return self._get_default_expiries()
             
             # Extract unique expiry dates from response
             expiry_dates = set()
@@ -108,8 +121,8 @@ class ExpiryManager:
                         expiry_dates.add(item['expiry'])
             
             if not expiry_dates:
-                logger.warning(f"No expiry dates found in option chain")
-                return []
+                logger.warning(f"No expiry dates found in option chain, using defaults")
+                return self._get_default_expiries()
             
             # Convert to ExpiryInfo objects
             today = datetime.now().date()
@@ -128,6 +141,7 @@ class ExpiryManager:
                     
                     if not exp_date:
                         logger.warning(f"Could not parse expiry date: {exp_date_str}")
+                        continue
                         continue
                     
                     # Calculate days to expiry
@@ -164,9 +178,53 @@ class ExpiryManager:
             
             return expiry_list
         
+        except AttributeError as e:
+            logger.warning(f"OpenAlgo API method not available: {e}")
+            # Return default expiries when API method not available
+            return self._get_default_expiries()
         except Exception as e:
             logger.error(f"Error fetching expiries: {e}")
-            return []
+            # Return default expiries on error
+            return self._get_default_expiries()
+    
+    def _get_default_expiries(self) -> List[ExpiryInfo]:
+        """
+        Get default weekly expiries (nearest Thursday and next Thursday)
+        Used when OpenAlgo API is not available or doesn't support option chain fetch
+        
+        Returns:
+            List of two default ExpiryInfo objects for current and next week
+        """
+        today = datetime.now().date()
+        weekday = today.weekday()  # 0 = Monday, 3 = Thursday
+        
+        # Find this week's Thursday (3)
+        days_until_thursday = (3 - weekday) % 7
+        if days_until_thursday == 0 and today.weekday() == 3:
+            days_until_thursday = 0  # Today is Thursday
+        
+        this_week_expiry = today + timedelta(days=days_until_thursday if days_until_thursday > 0 else 7)
+        next_week_expiry = this_week_expiry + timedelta(days=7)
+        
+        expiry_list = [
+            ExpiryInfo(
+                expiry_date=this_week_expiry.strftime('%d%b%y').upper(),
+                expiry_type=ExpiryType.WEEKLY,
+                days_to_expiry=(this_week_expiry - today).days
+            ),
+            ExpiryInfo(
+                expiry_date=next_week_expiry.strftime('%d%b%y').upper(),
+                expiry_type=ExpiryType.WEEKLY,
+                days_to_expiry=(next_week_expiry - today).days
+            )
+        ]
+        
+        logger.info(f"Using default weekly expiries (API not available)")
+        for exp in expiry_list:
+            logger.info(f"  Default Expiry: {exp.expiry_date} ({exp.days_to_expiry} days to expiry)")
+        
+        self.available_expiries = expiry_list
+        return expiry_list
     
     def select_nearest_weekly_expiry(self) -> Optional[ExpiryInfo]:
         """
@@ -176,7 +234,11 @@ class ExpiryManager:
             ExpiryInfo object or None if not found
         """
         if not self.available_expiries:
-            logger.warning("No available expiries to select from")
+            logger.warning("No available expiries to select from, fetching...")
+            self.fetch_available_expiries(self.selected_underlying)
+        
+        if not self.available_expiries:
+            logger.error("Still no available expiries after fetch attempt")
             return None
         
         # Find nearest weekly expiry

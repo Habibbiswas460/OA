@@ -63,8 +63,8 @@ class DataFeed:
                 ws_url=config.OPENALGO_WS_URL
             )
             
-            # Set connection timeout
-            self.client.connect(timeout=10)
+            # Connect to WebSocket (OpenAlgo connect() doesn't accept timeout parameter)
+            self.client.connect()
             self.connected = True
             self.stop_reconnect.clear()
             
