@@ -1,9 +1,11 @@
 """
 ANGEL-X Order Manager
 OpenAlgo API integration with execution safeguards
+Optimized for local network with retry logic and timeout handling
 """
 
 import logging
+import time
 from enum import Enum
 from typing import Optional
 try:
@@ -38,6 +40,7 @@ class OrderManager:
     """
     ANGEL-X Order Manager
     Interfaces with OpenAlgo API for order placement and management
+    With retry logic and timeout handling for local network resilience
     """
     
     def __init__(self):
@@ -59,6 +62,50 @@ class OrderManager:
         self.active_orders = {}
         self.order_counter = 0
     
+    def _api_call_with_retry(self, api_func, *args, **kwargs):
+        """
+        Execute API call with retry logic and timeout handling
+        
+        Args:
+            api_func: The API function to call
+            *args, **kwargs: Arguments to pass to the function
+            
+        Returns:
+            API response or None if all retries fail
+        """
+        retry_count = 0
+        max_retries = config.API_RETRY_ATTEMPTS
+        
+        while retry_count < max_retries:
+            try:
+                # Add timeout to kwargs if not already present
+                if 'timeout' not in kwargs:
+                    kwargs['timeout'] = config.API_REQUEST_TIMEOUT
+                
+                result = api_func(*args, **kwargs)
+                return result
+                
+            except TimeoutError:
+                retry_count += 1
+                logger.warning(f"API call timeout (attempt {retry_count}/{max_retries})")
+                if retry_count < max_retries:
+                    time.sleep(config.API_RETRY_DELAY)
+                    
+            except ConnectionError as e:
+                retry_count += 1
+                logger.warning(f"Connection error: {e} (attempt {retry_count}/{max_retries})")
+                if retry_count < max_retries:
+                    time.sleep(config.API_RETRY_DELAY)
+                    
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"API error: {e} (attempt {retry_count}/{max_retries})")
+                if retry_count < max_retries:
+                    time.sleep(config.API_RETRY_DELAY)
+        
+        logger.error(f"API call failed after {max_retries} attempts")
+        return None
+    
     def place_order(
         self,
         exchange: str,
@@ -70,7 +117,7 @@ class OrderManager:
         product: ProductType = ProductType.MIS
     ) -> Optional[dict]:
         """
-        Place an order
+        Place an order with retry logic
         
         Args:
             exchange: NSE, BSE, MCX, NCDEX

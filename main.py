@@ -1,6 +1,7 @@
 """
 ANGEL-X Main Strategy Orchestrator
 Coordinates all 9 layers of ANGEL-X system
+Optimized for local network with auto-reconnection and monitoring
 """
 
 import signal
@@ -16,6 +17,7 @@ from config import config
 from src.utils.logger import StrategyLogger
 from src.utils.data_feed import DataFeed
 from src.utils.trade_journal import TradeJournal
+from src.utils.network_resilience import get_network_monitor
 
 # Engines
 from src.engines.bias_engine import BiasEngine, BiasState
@@ -53,6 +55,11 @@ class AngelXStrategy:
         logger.info("="*80)
         logger.info("ANGEL-X STRATEGY INITIALIZATION")
         logger.info("="*80)
+        
+        # Initialize network monitor for local network resilience
+        self.network_monitor = get_network_monitor()
+        self.network_monitor.start_monitoring()
+        logger.info("Network monitor started - monitoring connectivity and data flow")
         
         # Initialize all components
         self.data_feed = DataFeed()
@@ -333,9 +340,19 @@ class AngelXStrategy:
         for trade in active_trades:
             self.trade_manager.exit_trade(trade, "strategy_stop")
         
-        # Disconnect
+        # Disconnect and cleanup
         self.bias_engine.stop()
         self.data_feed.disconnect()
+        
+        # Stop network monitoring
+        if hasattr(self, 'network_monitor'):
+            logger.info("Network Health Summary:")
+            health = self.network_monitor.get_health_status()
+            logger.info(f"  API Calls: {health['api_calls']}")
+            logger.info(f"  API Errors: {health['api_errors']} ({health['api_error_rate']:.1%})")
+            logger.info(f"  WebSocket Reconnects: {health['websocket_reconnects']}")
+            logger.info(f"  Alerts: {health['alerts_count']}")
+            self.network_monitor.stop_monitoring()
         
         # Print summary
         stats = self.trade_manager.get_trade_statistics()
