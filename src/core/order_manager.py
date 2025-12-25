@@ -1,0 +1,259 @@
+"""
+ANGEL-X Order Manager
+OpenAlgo API integration with execution safeguards
+"""
+
+import logging
+from enum import Enum
+from typing import Optional
+try:
+    from openalgo import api
+except ImportError:
+    api = None
+from config import config
+from src.utils.logger import StrategyLogger
+
+logger = StrategyLogger.get_logger(__name__)
+
+
+class OrderAction(Enum):
+    """Order action"""
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderType(Enum):
+    """Order type"""
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+
+
+class ProductType(Enum):
+    """Product type"""
+    MIS = "MIS"
+    NRML = "NRML"
+
+
+class OrderManager:
+    """
+    ANGEL-X Order Manager
+    Interfaces with OpenAlgo API for order placement and management
+    """
+    
+    def __init__(self):
+        """Initialize order manager"""
+        if api is None:
+            logger.warning("OpenAlgo library not available")
+            self.client = None
+        else:
+            try:
+                self.client = api(
+                    api_key=config.OPENALGO_API_KEY,
+                    host=config.OPENALGO_HOST
+                )
+                logger.info(f"OrderManager initialized with OpenAlgo API")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAlgo client: {e}")
+                self.client = None
+        
+        self.active_orders = {}
+        self.order_counter = 0
+    
+    def place_order(
+        self,
+        exchange: str,
+        symbol: str,
+        action: OrderAction,
+        order_type: OrderType,
+        price: float,
+        quantity: int,
+        product: ProductType = ProductType.MIS
+    ) -> Optional[dict]:
+        """
+        Place an order
+        
+        Args:
+            exchange: NSE, BSE, MCX, NCDEX
+            symbol: Stock/option symbol
+            action: BUY or SELL
+            order_type: MARKET or LIMIT
+            price: Order price (for LIMIT orders)
+            quantity: Number of units
+            product: MIS or NRML
+        
+        Returns:
+            Order response dict or None if failed
+        """
+        
+        if not self.client:
+            logger.error("OrderManager not initialized with API client")
+            return None
+        
+        try:
+            # Pre-execution checks
+            if quantity <= 0:
+                logger.warning(f"Invalid quantity: {quantity}")
+                return None
+            
+            if order_type == OrderType.LIMIT and price <= 0:
+                logger.warning(f"Invalid price for LIMIT order: {price}")
+                return None
+            
+            # Prepare order parameters
+            order_params = {
+                'exchange': exchange,
+                'symbol': symbol,
+                'action': action.value,
+                'price_type': order_type.value,
+                'price': price if order_type == OrderType.LIMIT else 0,
+                'quantity': quantity,
+                'product': product.value,
+                'order_type': 'REGULAR',
+                'strategy': config.STRATEGY_NAME
+            }
+            
+            # Place order via OpenAlgo
+            response = self.client.placeorder(**order_params)
+            
+            if response and 'status' in response:
+                order_id = response.get('orderid')
+                self.active_orders[order_id] = response
+                
+                logger.info(
+                    f"Order placed: {action.value} {quantity} {symbol} @ ₹{price:.2f} | "
+                    f"Order ID: {order_id}"
+                )
+                
+                return response
+            else:
+                logger.error(f"Order placement failed: {response}")
+                return None
+        
+        except Exception as e:
+            logger.error(f"Error placing order: {e}")
+            return None
+    
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel an order"""
+        if not self.client:
+            return False
+        
+        try:
+            response = self.client.cancelorder(order_id=order_id)
+            if response:
+                logger.info(f"Order cancelled: {order_id}")
+                self.active_orders.pop(order_id, None)
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error cancelling order: {e}")
+            return False
+    
+    def modify_order(
+        self,
+        order_id: str,
+        new_price: float,
+        new_quantity: int
+    ) -> bool:
+        """Modify an order"""
+        if not self.client:
+            return False
+        
+        try:
+            response = self.client.modifyorder(
+                order_id=order_id,
+                price=new_price,
+                quantity=new_quantity
+            )
+            if response:
+                logger.info(f"Order modified: {order_id}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error modifying order: {e}")
+            return False
+    
+    def get_order_status(self, order_id: str) -> Optional[dict]:
+        """Get order status"""
+        if not self.client:
+            return None
+        
+        try:
+            response = self.client.orderbook()
+            if response:
+                for order in response:
+                    if order.get('orderid') == order_id:
+                        return order
+            return None
+        except Exception as e:
+            logger.error(f"Error getting order status: {e}")
+            return None
+    
+    def get_position(self, symbol: str) -> Optional[dict]:
+        """Get current position"""
+        if not self.client:
+            return None
+        
+        try:
+            response = self.client.positionbook()
+            if response:
+                for position in response:
+                    if position.get('symbol') == symbol:
+                        return position
+            return None
+        except Exception as e:
+            logger.error(f"Error getting position: {e}")
+            return None
+    
+    def close_position(self, symbol: str) -> bool:
+        """Close entire position"""
+        if not self.client:
+            return False
+        
+        try:
+            position = self.get_position(symbol)
+            if not position:
+                return False
+            
+            qty = position.get('netqty', 0)
+            if qty == 0:
+                return True
+            
+            action = OrderAction.SELL if qty > 0 else OrderAction.BUY
+            
+            response = self.place_order(
+                exchange='NSE',
+                symbol=symbol,
+                action=action,
+                order_type=OrderType.MARKET,
+                price=0,
+                quantity=abs(qty)
+            )
+            
+            return response is not None
+        
+        except Exception as e:
+            logger.error(f"Error closing position: {e}")
+            return False
+    
+    def get_all_orders(self) -> list:
+        """Get all active orders"""
+        if not self.client:
+            return []
+        
+        try:
+            return self.client.orderbook() or []
+        except Exception as e:
+            logger.error(f"Error getting orders: {e}")
+            return []
+    
+    def get_all_positions(self) -> list:
+        """Get all positions"""
+        if not self.client:
+            return []
+        
+        try:
+            return self.client.positionbook() or []
+        except Exception as e:
+            logger.error(f"Error getting positions: {e}")
+            return []
