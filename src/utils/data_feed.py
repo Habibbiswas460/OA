@@ -8,9 +8,16 @@ import json
 import time
 from threading import Thread, Lock, Event
 from datetime import datetime
-from openalgo import api
+from src.utils.network_resilience import get_network_monitor
 from config import config
 from src.utils.logger import StrategyLogger
+
+try:
+    from openalgo import api
+    _openalgo_import_error = None
+except ImportError as exc:  # Allow running without SDK in demo/offline setups
+    api = None
+    _openalgo_import_error = exc
 logger = StrategyLogger.get_logger(__name__)
 
 
@@ -53,6 +60,9 @@ class DataFeed:
         self.polling_thread = None
         self.last_polled_time = {}
         self.polling_interval = 1.5  # Poll every 1.5 seconds
+
+        # Network health tracking
+        self.network_monitor = get_network_monitor()
         
         logger.info("DataFeed initialized with auto-reconnection + REST API polling fallback")
 
@@ -93,6 +103,10 @@ class DataFeed:
                 return False
             
             logger.info(f"Connecting to WebSocket (attempt {retry_count + 1}/{self.MAX_RECONNECT_ATTEMPTS})...")
+
+            if api is None:
+                logger.error("OpenAlgo SDK not available; install `openalgo` to enable live data", exc_info=_openalgo_import_error)
+                return False
             
             # Initialize OpenAlgo client with WebSocket
             self.client = api(
@@ -105,6 +119,7 @@ class DataFeed:
             self.client.connect()
             self.connected = True
             self.stop_reconnect.clear()
+            self.network_monitor.start_monitoring()
             
             logger.info("WebSocket connected successfully")
             
@@ -178,6 +193,7 @@ class DataFeed:
             logger.info("Attempting to reconnect...")
             self.disconnect()
             time.sleep(self.RECONNECT_DELAY)
+            self.network_monitor.record_websocket_reconnect()
             
             if self.connect():
                 # Re-subscribe to all previously subscribed symbols
@@ -368,6 +384,10 @@ class DataFeed:
             symbol = tick.get('symbol')
             if not symbol:
                 return
+
+            # Record data flow for health monitoring
+            self.last_tick_received = time.time()
+            self.network_monitor.record_websocket_tick()
             
             with self.data_lock:
                 # Update LTP
@@ -464,18 +484,22 @@ class DataFeed:
             # Try to get analyzer status which includes broker info
             try:
                 status = self.client.analyzerstatus()
+                self.network_monitor.record_api_call(success=True)
                 logger.info(f"OpenAlgo Status: {status}")
                 return True
-            except:
-                pass
+            except Exception as e:
+                self.network_monitor.record_api_call(success=False)
+                logger.debug(f"Analyzer status check failed: {e}")
             
             # Fallback: try a simple API call
             try:
                 quotes = self.client.quotes(symbol="NIFTY", exchange="NSE_INDEX")
                 if quotes and quotes.get('status') == 'success':
+                    self.network_monitor.record_api_call(success=True)
                     logger.info("✅ Broker connection verified via REST API")
                     return True
             except Exception as e:
+                self.network_monitor.record_api_call(success=False)
                 logger.warning(f"Broker check failed: {e}")
                 return False
                 
@@ -528,6 +552,7 @@ class DataFeed:
                             try:
                                 response = self.client.quotes(symbol=symbol, exchange=exchange)
                                 if response and response.get('status') == 'success':
+                                    self.network_monitor.record_api_call(success=True)
                                     data = response.get('data', {})
                                     tick = {
                                         'symbol': symbol,
@@ -545,6 +570,7 @@ class DataFeed:
                                     self.last_polled_time[symbol] = current_time
                                     
                             except Exception as e:
+                                self.network_monitor.record_api_call(success=False)
                                 logger.error(f"Error polling {symbol}: {e}")
                     
                     time.sleep(0.5)  # Small sleep to avoid busy waiting
