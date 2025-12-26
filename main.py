@@ -150,6 +150,10 @@ class AngelXStrategy:
         """Main strategy loop"""
         logger.info("Entering main trading loop...")
         
+        # Expiry refresh tracking (time-based, following OpenAlgo best practices)
+        last_expiry_refresh = 0
+        EXPIRY_REFRESH_INTERVAL = 300  # 5 minutes
+        
         try:
             while self.running:
                 try:
@@ -164,19 +168,21 @@ class AngelXStrategy:
                         time.sleep(5)
                         continue
                     
-                    # Refresh expiry periodically (every 100 iterations)
-                    if self.daily_trades % 100 == 0:
+                    # Refresh expiry data every 5 minutes (not every iteration!)
+                    current_time = time.time()
+                    if current_time - last_expiry_refresh >= EXPIRY_REFRESH_INTERVAL:
                         self.expiry_manager.refresh_expiry_chain(config.PRIMARY_UNDERLYING)
                         expiry_stats = self.expiry_manager.get_expiry_statistics()
-                        logger.info(f"Expiry status: {expiry_stats}")
+                        logger.info(f"✅ Expiry refreshed: {expiry_stats}")
+                        last_expiry_refresh = current_time
                     
-                    # Get expiry rules
+                    # Get expiry rules (lightweight, can be called every iteration)
                     expiry_rules = self.expiry_manager.apply_expiry_rules()
                     
                     # Get latest market data
                     ltp = self.data_feed.get_ltp(config.PRIMARY_UNDERLYING)
                     if not ltp:
-                        time.sleep(0.5)
+                        time.sleep(1)  # Wait 1 second if no data (reduced CPU usage)
                         continue
                     
                     # Update market state
