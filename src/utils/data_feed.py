@@ -27,6 +27,7 @@ class DataFeed:
         self.ws = None
         self.connected = False
         self.subscribed_symbols = set()
+        self.subscribed_instruments = []  # Store for re-subscription
         
         # Thread-safe data storage
         self.data_lock = Lock()
@@ -147,9 +148,19 @@ class DataFeed:
     def _resubscribe_all(self):
         """Re-subscribe to all previously subscribed symbols"""
         try:
-            # This would need to be called after reconnecting
-            # Implementation depends on storing subscription details
-            logger.info("Re-subscription logic would execute here")
+            if not self.subscribed_instruments:
+                logger.warning("No instruments to re-subscribe")
+                return
+            
+            logger.info(f"Re-subscribing to {len(self.subscribed_instruments)} instruments...")
+            
+            # Re-subscribe to LTP for stored instruments
+            success = self.subscribe_ltp(self.subscribed_instruments, retry_count=0)
+            if success:
+                logger.info("Re-subscription successful")
+            else:
+                logger.warning("Re-subscription failed")
+                
         except Exception as e:
             logger.error(f"Re-subscription error: {e}")
     
@@ -187,6 +198,9 @@ class DataFeed:
                 instruments,
                 on_data_received=self._process_tick
             )
+            
+            # Store instruments for re-subscription after reconnect
+            self.subscribed_instruments = instruments
             
             for inst in instruments:
                 self.subscribed_symbols.add(f"{inst['exchange']}:{inst['symbol']}")
