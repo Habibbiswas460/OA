@@ -46,7 +46,13 @@ class DataFeed:
         self.stop_reconnect = Event()
         self.last_tick_received = time.time()
         
-        logger.info("DataFeed initialized with auto-reconnection support")
+        # REST API Polling fallback (when WebSocket not broadcasting)
+        self.use_rest_polling = False
+        self.polling_thread = None
+        self.last_polled_time = {}
+        self.polling_interval = 1.5  # Poll every 1.5 seconds
+        
+        logger.info("DataFeed initialized with auto-reconnection + REST API polling fallback")
     
     def connect(self, retry_count=0):
         """Establish WebSocket connection using OpenAlgo with retry logic"""
@@ -94,6 +100,7 @@ class DataFeed:
     
     def _health_check_loop(self):
         """Periodically check WebSocket health and reconnect if needed"""
+        no_data_count = 0
         while not self.stop_reconnect.is_set():
             try:
                 time.sleep(self.PING_INTERVAL)
@@ -105,10 +112,20 @@ class DataFeed:
                 # Check if ticks are being received
                 time_since_last_tick = time.time() - self.last_tick_received
                 if time_since_last_tick > 60 and self.subscribed_symbols:
-                    logger.warning(f"No ticks for {time_since_last_tick:.0f}s, checking connection...")
+                    no_data_count += 1
+                    logger.warning(f"No ticks for {time_since_last_tick:.0f}s (count: {no_data_count})")
+                    
+                    if no_data_count >= 2:  # After 2 minutes of no data
+                        if not self.use_rest_polling and self.subscribed_instruments:
+                            logger.critical("🔴 WebSocket NOT broadcasting data! Starting REST API fallback...")
+                            self.check_broker_connection()  # Check broker status
+                            self.start_rest_polling(self.subscribed_instruments)
+                    
                     if not self._is_connection_alive():
                         logger.warning("Connection appears dead, reconnecting...")
                         self.reconnect()
+                else:
+                    no_data_count = 0  # Reset counter when data flows
                         
             except Exception as e:
                 logger.error(f"Health check error: {e}")
@@ -351,7 +368,8 @@ class DataFeed:
             # Call registered callbacks
             self._trigger_callbacks(tick)
             
-            logger.log_market_data(f"{symbol}: {tick.get('ltp')}")
+            if 'ltp' in tick:
+                logger.debug(f"{tick.get('symbol')}: {tick.get('ltp')} [{tick.get('source', 'WEBSOCKET')}]")
             
         except Exception as e:
             logger.error(f"Error processing tick: {e}")
@@ -402,3 +420,111 @@ class DataFeed:
     def is_connected(self):
         """Check if WebSocket is connected"""
         return self.connected
+    
+    def check_broker_connection(self):
+        """Check if broker is connected in OpenAlgo"""
+        try:
+            if not hasattr(self, 'client') or not self.client:
+                logger.warning("Client not initialized")
+                return False
+            
+            # Try to get analyzer status which includes broker info
+            try:
+                status = self.client.analyzerstatus()
+                logger.info(f"OpenAlgo Status: {status}")
+                return True
+            except:
+                pass
+            
+            # Fallback: try a simple API call
+            try:
+                quotes = self.client.quotes(symbol="NIFTY", exchange="NSE_INDEX")
+                if quotes and quotes.get('status') == 'success':
+                    logger.info("✅ Broker connection verified via REST API")
+                    return True
+            except Exception as e:
+                logger.warning(f"Broker check failed: {e}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error checking broker connection: {e}")
+            return False
+    
+    def start_rest_polling(self, instruments):
+        """Start REST API polling as fallback when WebSocket not broadcasting"""
+        if self.use_rest_polling and self.polling_thread and self.polling_thread.is_alive():
+            logger.info("REST API polling already active")
+            return True
+        
+        logger.warning("⚠️ WebSocket not receiving data! Starting REST API polling fallback...")
+        self.use_rest_polling = True
+        
+        # Store symbols for polling
+        self.polling_symbols = instruments
+        
+        # Start polling thread
+        self.polling_thread = Thread(
+            target=self._polling_loop,
+            daemon=True,
+            name="REST-Polling"
+        )
+        self.polling_thread.start()
+        logger.info("✅ REST API polling started as fallback")
+        return True
+    
+    def _polling_loop(self):
+        """Continuously poll REST API for LTP updates"""
+        try:
+            while self.use_rest_polling and not self.stop_reconnect.is_set():
+                try:
+                    for inst in self.polling_symbols:
+                        symbol = inst.get('symbol')
+                        exchange = inst.get('exchange', 'NSE_INDEX')
+                        
+                        # Use NSE_INDEX for NIFTY/indices
+                        if 'NIFTY' in symbol or 'BANK' in symbol:
+                            exchange = 'NSE_INDEX'
+                        
+                        # Poll every 1.5 seconds per symbol
+                        current_time = time.time()
+                        if symbol not in self.last_polled_time:
+                            self.last_polled_time[symbol] = 0
+                        
+                        time_diff = current_time - self.last_polled_time[symbol]
+                        if time_diff >= self.polling_interval:
+                            try:
+                                response = self.client.quotes(symbol=symbol, exchange=exchange)
+                                if response and response.get('status') == 'success':
+                                    data = response.get('data', {})
+                                    tick = {
+                                        'symbol': symbol,
+                                        'ltp': data.get('ltp'),
+                                        'bid': data.get('bid'),
+                                        'ask': data.get('ask'),
+                                        'high': data.get('high'),
+                                        'low': data.get('low'),
+                                        'open': data.get('open'),
+                                        'volume': data.get('volume'),
+                                        'timestamp': datetime.now(),
+                                        'source': 'REST_POLLING'
+                                    }
+                                    self._process_tick(tick)
+                                    self.last_polled_time[symbol] = current_time
+                                    
+                            except Exception as e:
+                                logger.error(f"Error polling {symbol}: {e}")
+                    
+                    time.sleep(0.5)  # Small sleep to avoid busy waiting
+                    
+                except Exception as e:
+                    logger.error(f"Polling loop error: {e}")
+                    time.sleep(self.RECONNECT_DELAY)
+                    
+        except Exception as e:
+            logger.error(f"REST polling stopped: {e}")
+            self.use_rest_polling = False
+    
+    def stop_rest_polling(self):
+        """Stop REST API polling"""
+        self.use_rest_polling = False
+        logger.info("REST API polling stopped")
