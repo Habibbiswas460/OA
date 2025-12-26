@@ -35,6 +35,8 @@ class DataFeed:
         self.quote_data = {}
         self.depth_data = {}
         self.tick_data = []
+        self.tick_csv_path = None
+        self._csv_initialized = False
         
         # Callbacks
         self.on_tick_callbacks = []
@@ -53,6 +55,35 @@ class DataFeed:
         self.polling_interval = 1.5  # Poll every 1.5 seconds
         
         logger.info("DataFeed initialized with auto-reconnection + REST API polling fallback")
+
+    def _init_csv(self):
+        try:
+            from pathlib import Path
+            from datetime import datetime
+            if not self._csv_initialized:
+                ts = datetime.now().strftime("%Y%m%d")
+                ticks_dir = Path("ticks")
+                ticks_dir.mkdir(exist_ok=True)
+                self.tick_csv_path = ticks_dir / f"ticks_{ts}.csv"
+                if not self.tick_csv_path.exists():
+                    with open(self.tick_csv_path, "w") as f:
+                        f.write("timestamp,symbol,ltp,bid,ask,source\n")
+                self._csv_initialized = True
+        except Exception as e:
+            logger.error(f"Error initializing tick CSV: {e}")
+
+    def _write_tick_to_csv(self, tick):
+        try:
+            if not self._csv_initialized:
+                self._init_csv()
+            if not self.tick_csv_path:
+                return
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            line = f"{ts},{tick.get('symbol')},{tick.get('ltp')},{tick.get('bid')},{tick.get('ask')},{tick.get('source','WEBSOCKET')}\n"
+            with open(self.tick_csv_path, "a") as f:
+                f.write(line)
+        except Exception as e:
+            logger.error(f"Error writing tick to CSV: {e}")
     
     def connect(self, retry_count=0):
         """Establish WebSocket connection using OpenAlgo with retry logic"""
@@ -370,6 +401,8 @@ class DataFeed:
             
             if 'ltp' in tick:
                 logger.debug(f"{tick.get('symbol')}: {tick.get('ltp')} [{tick.get('source', 'WEBSOCKET')}]")
+                # Persist tick to CSV
+                self._write_tick_to_csv(tick)
             
         except Exception as e:
             logger.error(f"Error processing tick: {e}")

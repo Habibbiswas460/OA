@@ -52,7 +52,8 @@ class OrderManager:
             try:
                 self.client = api(
                     api_key=config.OPENALGO_API_KEY,
-                    host=config.OPENALGO_HOST
+                    host=config.OPENALGO_HOST,
+                    ws_url=config.OPENALGO_WS_URL
                 )
                 logger.info(f"OrderManager initialized with OpenAlgo API")
             except Exception as e:
@@ -61,6 +62,16 @@ class OrderManager:
         
         self.active_orders = {}
         self.order_counter = 0
+
+    def _simulate_response(self, payload: dict) -> dict:
+        """Simulate an order response in PAPER_TRADING mode"""
+        import random
+        sim = {
+            'status': 'success',
+            'orderid': f"PAPER_{int(time.time())}_{random.randint(1000,9999)}"
+        }
+        sim.update(payload)
+        return sim
     
     def _api_call_with_retry(self, api_func, *args, **kwargs):
         """
@@ -149,10 +160,7 @@ class OrderManager:
             
             # PAPER TRADING MODE - Simulate order locally
             if config.PAPER_TRADING:
-                import random
-                simulated_order = {
-                    'status': 'success',
-                    'orderid': f'PAPER_{int(time.time())}_{random.randint(1000, 9999)}',
+                simulated_order = self._simulate_response({
                     'exchange': exchange,
                     'symbol': symbol,
                     'action': action.value,
@@ -162,16 +170,13 @@ class OrderManager:
                     'order_type': order_type.value,
                     'message': 'Paper order simulated locally',
                     'timestamp': time.time()
-                }
-                
+                })
                 order_id = simulated_order['orderid']
                 self.active_orders[order_id] = simulated_order
-                
                 logger.info(
                     f"📄 PAPER ORDER: {action.value} {quantity} {symbol} @ ₹{price:.2f} | "
                     f"Order ID: {order_id}"
                 )
-                
                 return simulated_order
                 logger.warning(f"Invalid price for LIMIT order: {price}")
                 return None
@@ -208,6 +213,190 @@ class OrderManager:
         
         except Exception as e:
             logger.error(f"Error placing order: {e}")
+            return None
+
+    def resolve_option_symbol(self, underlying: str, expiry_date: str, offset: str, option_type: str) -> Optional[dict]:
+        """Resolve an option symbol via OpenAlgo optionsymbol"""
+        try:
+            if config.PAPER_TRADING:
+                # Simulate symbol resolution
+                return {
+                    'status': 'success',
+                    'symbol': f"{underlying}{expiry_date}{offset}{option_type}",
+                    'exchange': 'NFO',
+                    'lotsize': config.MINIMUM_LOT_SIZE
+                }
+            if not self.client:
+                return None
+            resp = self._api_call_with_retry(
+                self.client.optionsymbol,
+                underlying=underlying,
+                exchange=config.DEFAULT_UNDERLYING_EXCHANGE,
+                expiry_date=expiry_date,
+                offset=offset,
+                option_type=option_type
+            )
+            return resp
+        except Exception as e:
+            logger.error(f"Error resolving option symbol: {e}")
+            return None
+
+    def place_option_order(
+        self,
+        strategy: str,
+        underlying: str,
+        expiry_date: str,
+        offset: str,
+        option_type: str,
+        action: str,
+        quantity: int,
+        pricetype: Optional[str] = None,
+        product: Optional[str] = None,
+        splitsize: int = 0
+    ) -> Optional[dict]:
+        """Place an options order using OpenAlgo optionsorder (ATM/ITM/OTM offset)."""
+        try:
+            pricetype = pricetype or config.DEFAULT_OPTION_PRICE_TYPE
+            product = product or config.DEFAULT_OPTION_PRODUCT
+            payload = {
+                'strategy': strategy,
+                'underlying': underlying,
+                'exchange': config.DEFAULT_UNDERLYING_EXCHANGE,
+                'expiry_date': expiry_date,
+                'offset': offset,
+                'option_type': option_type,
+                'action': action,
+                'quantity': quantity,
+                'pricetype': pricetype,
+                'product': product,
+                'splitsize': splitsize
+            }
+            logger.log_order({'type': 'OPTIONSORDER_INTENT', **payload})
+            if config.PAPER_TRADING:
+                sim = self._simulate_response(payload)
+                self.active_orders[sim['orderid']] = sim
+                logger.info(f"📄 PAPER OPTIONS ORDER: {payload}")
+                return sim
+            if not self.client:
+                logger.error("OpenAlgo client not initialized")
+                return None
+            resp = self._api_call_with_retry(self.client.optionsorder, **payload)
+            if resp and resp.get('status') == 'success':
+                # Check if analyzer mode (paper trading)
+                if resp.get('mode') == 'analyze':
+                    logger.warning(f"⚠️ ANALYZER MODE: Order simulated, not live. Response: {resp}")
+                    logger.log_order({'type': 'OPTIONSORDER_ANALYZER', 'response': resp})
+                else:
+                    logger.info(f"Options order placed: {resp}")
+                    logger.log_order({'type': 'OPTIONSORDER_PLACED', 'response': resp})
+                self.active_orders[resp.get('orderid')] = resp
+                return resp
+            logger.error(f"Options order failed: {resp}")
+            logger.log_order({'type': 'OPTIONSORDER_REJECTED', 'response': resp})
+            return None
+        except Exception as e:
+            logger.error(f"Error placing options order: {e}")
+            return None
+
+    def place_options_multi_order(
+        self,
+        strategy: str,
+        underlying: str,
+        legs: list,
+        expiry_date: Optional[str] = None
+    ) -> Optional[dict]:
+        """Place multi-leg options order using optionsmultiorder."""
+        try:
+            payload = {
+                'strategy': strategy,
+                'underlying': underlying,
+                'exchange': config.DEFAULT_UNDERLYING_EXCHANGE,
+            }
+            if expiry_date:
+                payload['expiry_date'] = expiry_date
+            payload['legs'] = legs
+            logger.log_order({'type': 'MULTIORDER_INTENT', **payload})
+            if config.PAPER_TRADING:
+                sim = self._simulate_response(payload)
+                logger.info(f"📄 PAPER OPTIONS MULTI ORDER: {payload}")
+                logger.log_order({'type': 'MULTIORDER_PAPER', 'response': sim})
+                return sim
+            if not self.client:
+                logger.error("OpenAlgo client not initialized")
+                return None
+            resp = self._api_call_with_retry(self.client.optionsmultiorder, **payload)
+            if resp and resp.get('status') == 'success':
+                # Check if analyzer mode (paper trading)
+                if resp.get('mode') == 'analyze':
+                    logger.warning(f"⚠️ ANALYZER MODE: Multi-order simulated, not live. Response: {resp}")
+                    logger.log_order({'type': 'MULTIORDER_ANALYZER', 'response': resp})
+                else:
+                    logger.info(f"Options multi-order placed: {resp}")
+                    logger.log_order({'type': 'MULTIORDER_PLACED', 'response': resp})
+                return resp
+            logger.error(f"Options multi-order failed: {resp}")
+            logger.log_order({'type': 'MULTIORDER_REJECTED', 'response': resp})
+            return None
+        except Exception as e:
+            logger.error(f"Error placing options multi-order: {e}")
+            return None
+
+    def place_basket_order(self, orders: list) -> Optional[dict]:
+        """Place a basket of equity orders."""
+        try:
+            if config.PAPER_TRADING:
+                sim = self._simulate_response({'orders': orders})
+                logger.info(f"📄 PAPER BASKET ORDER: {orders}")
+                return sim
+            if not self.client:
+                logger.error("OpenAlgo client not initialized")
+                return None
+            resp = self._api_call_with_retry(self.client.basketorder, orders=orders)
+            if resp and resp.get('status') == 'success':
+                logger.info(f"Basket order placed: {resp}")
+                return resp
+            logger.error(f"Basket order failed: {resp}")
+            return None
+        except Exception as e:
+            logger.error(f"Error placing basket order: {e}")
+            return None
+
+    def place_split_order(
+        self,
+        symbol: str,
+        exchange: str,
+        action: str,
+        quantity: int,
+        splitsize: int,
+        price_type: str,
+        product: str
+    ) -> Optional[dict]:
+        """Place split order using OpenAlgo splitorder."""
+        try:
+            payload = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'action': action,
+                'quantity': quantity,
+                'splitsize': splitsize,
+                'price_type': price_type,
+                'product': product
+            }
+            if config.PAPER_TRADING:
+                sim = self._simulate_response(payload)
+                logger.info(f"📄 PAPER SPLIT ORDER: {payload}")
+                return sim
+            if not self.client:
+                logger.error("OpenAlgo client not initialized")
+                return None
+            resp = self._api_call_with_retry(self.client.splitorder, **payload)
+            if resp and resp.get('status') == 'success':
+                logger.info(f"Split order placed: {resp}")
+                return resp
+            logger.error(f"Split order failed: {resp}")
+            return None
+        except Exception as e:
+            logger.error(f"Error placing split order: {e}")
             return None
     
     def cancel_order(self, order_id: str) -> bool:

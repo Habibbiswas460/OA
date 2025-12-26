@@ -22,7 +22,8 @@ class MarketData:
     def __init__(self):
         self.client = api(
             api_key=config.OPENALGO_API_KEY,
-            host=config.OPENALGO_HOST
+            host=config.OPENALGO_HOST,
+            ws_url=config.OPENALGO_WS_URL
         )
         
         logger.info("MarketData initialized")

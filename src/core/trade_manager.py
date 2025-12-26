@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, List
 from config import config
 from src.utils.logger import StrategyLogger
+from src.core.order_manager import OrderManager
 
 logger = StrategyLogger.get_logger(__name__)
 
@@ -59,6 +60,8 @@ class TradeManager:
         self.active_trades: List[Trade] = []
         self.closed_trades: List[Trade] = []
         self.trade_counter = 0
+        # Local order manager for multi-leg operations
+        self._order_manager = OrderManager()
         
         logger.info("TradeManager (ANGEL-X) initialized")
     
@@ -109,6 +112,51 @@ class TradeManager:
         logger.info(f"Trade opened: {trade_id} | {option_type} {strike} @ ₹{entry_price:.2f} | SL: ₹{sl_price:.2f}")
         
         return trade
+
+    def enter_multi_leg_order(
+        self,
+        underlying: str,
+        legs: List[dict],
+        expiry_date: Optional[str] = None
+    ) -> Optional[dict]:
+        """Place a multi-leg options order via OpenAlgo.
+
+        Args:
+            underlying: Underlying symbol (e.g., NIFTY)
+            legs: List of leg dicts (offset/option_type/action/quantity [and optional pricetype/product/splitsize])
+            expiry_date: Common expiry in DDMMMYY (if not per-leg)
+
+        Returns:
+            Order response dict or None
+        """
+        try:
+            intent = {
+                'type': 'MULTI_LEG_INTENT',
+                'underlying': underlying,
+                'expiry_date': expiry_date,
+                'legs': legs
+            }
+            logger.log_order(intent)
+            resp = self._order_manager.place_options_multi_order(
+                strategy=config.STRATEGY_NAME,
+                underlying=underlying,
+                legs=legs,
+                expiry_date=expiry_date
+            )
+            if resp and resp.get('status') == 'success':
+                # Validate multi-order results
+                results = resp.get('results')
+                if not results or len(results) == 0:
+                    logger.error(f"⚠️ Multi-order success but NO RESULTS. Response: {resp}")
+                    logger.log_order({'type': 'MULTI_LEG_NO_RESULTS', 'response': resp})
+                    return None  # Treat as failure despite success status
+                logger.log_order({'type': 'MULTI_LEG_PLACED', 'response': resp})
+            else:
+                logger.log_order({'type': 'MULTI_LEG_REJECTED', 'response': resp})
+            return resp
+        except Exception as e:
+            logger.error(f"Error in enter_multi_leg_order: {e}")
+            return None
     
     def update_trade(
         self,

@@ -30,6 +30,7 @@ from src.core.position_sizing import PositionSizing
 from src.core.order_manager import OrderManager, OrderAction, OrderType, ProductType
 from src.core.trade_manager import TradeManager
 from src.core.expiry_manager import ExpiryManager
+from src.utils.options_helper import OptionsHelper
 
 logger = StrategyLogger.get_logger(__name__)
 
@@ -71,6 +72,7 @@ class AngelXStrategy:
         self.order_manager = OrderManager()
         self.trade_manager = TradeManager()
         self.trade_journal = TradeJournal()
+        self.options_helper = OptionsHelper()
         
         # Expiry manager - auto-detect from OpenAlgo
         self.expiry_manager = ExpiryManager()
@@ -97,6 +99,77 @@ class AngelXStrategy:
         """Handle shutdown signals"""
         logger.info("Received shutdown signal")
         self.stop()
+    
+    def _place_multileg_order(self, entry_context, position, expiry_rules):
+        """Place multi-leg options order (straddle/strangle) based on config."""
+        try:
+            current_exp = self.expiry_manager.get_current_expiry()
+            if not current_exp:
+                logger.error("No current expiry; cannot place multileg order")
+                return None
+            
+            expiry_date = current_exp.expiry_date
+            qty = int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0))
+            
+            legs = []
+            
+            if config.MULTILEG_STRATEGY_TYPE == "STRADDLE":
+                # ATM CE + ATM PE (long both)
+                legs = [
+                    {
+                        "offset": config.MULTILEG_BUY_LEG_OFFSET,
+                        "option_type": "CE",
+                        "action": "BUY",
+                        "quantity": qty,
+                        "pricetype": config.DEFAULT_OPTION_PRICE_TYPE,
+                        "product": config.DEFAULT_OPTION_PRODUCT
+                    },
+                    {
+                        "offset": config.MULTILEG_BUY_LEG_OFFSET,
+                        "option_type": "PE",
+                        "action": "BUY",
+                        "quantity": qty,
+                        "pricetype": config.DEFAULT_OPTION_PRICE_TYPE,
+                        "product": config.DEFAULT_OPTION_PRODUCT
+                    }
+                ]
+                logger.log_order({'type': 'STRADDLE_LEGS', 'legs': legs})
+            
+            elif config.MULTILEG_STRATEGY_TYPE == "STRANGLE":
+                # OTM CE + OTM PE (long both)
+                legs = [
+                    {
+                        "offset": config.MULTILEG_BUY_LEG_OFFSET,
+                        "option_type": "CE",
+                        "action": "BUY",
+                        "quantity": qty,
+                        "pricetype": config.DEFAULT_OPTION_PRICE_TYPE,
+                        "product": config.DEFAULT_OPTION_PRODUCT
+                    },
+                    {
+                        "offset": config.MULTILEG_BUY_LEG_OFFSET,
+                        "option_type": "PE",
+                        "action": "BUY",
+                        "quantity": qty,
+                        "pricetype": config.DEFAULT_OPTION_PRICE_TYPE,
+                        "product": config.DEFAULT_OPTION_PRODUCT
+                    }
+                ]
+                logger.log_order({'type': 'STRANGLE_LEGS', 'legs': legs})
+            
+            if legs:
+                order = self.trade_manager.enter_multi_leg_order(
+                    underlying=config.PRIMARY_UNDERLYING,
+                    legs=legs,
+                    expiry_date=expiry_date
+                )
+                return order
+            
+            return None
+        
+        except Exception as e:
+            logger.error(f"Error placing multileg order: {e}")
+            return None
     
     def start(self):
         """Start the strategy"""
@@ -240,22 +313,68 @@ class AngelXStrategy:
                                         target_price=position.target_price
                                     )
                                     
-                                    # Build symbol using expiry manager
-                                    order_symbol = self.expiry_manager.build_order_symbol(
-                                        entry_context.strike,
-                                        entry_context.option_type
-                                    )
-                                    
-                                    # Place order
-                                    order = self.order_manager.place_order(
-                                        exchange=config.UNDERLYING_EXCHANGE,
-                                        symbol=order_symbol,
-                                        action=OrderAction.BUY,
-                                        order_type=OrderType.LIMIT,
-                                        price=entry_context.entry_price,
-                                        quantity=int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0)),
-                                        product=ProductType.MIS
-                                    )
+                                    order = None
+                                    if config.USE_MULTILEG_STRATEGY:
+                                        # Place multi-leg order (straddle/strangle)
+                                        order = self._place_multileg_order(entry_context, position, expiry_rules)
+                                    elif getattr(config, 'USE_OPENALGO_OPTIONS_API', False):
+                                        # Use OpenAlgo optionsorder with offset
+                                        current_exp = self.expiry_manager.get_current_expiry()
+                                        if current_exp:
+                                            expiry_date = current_exp.expiry_date
+                                            offset = self.options_helper.compute_offset(
+                                                config.PRIMARY_UNDERLYING,
+                                                expiry_date,
+                                                entry_context.strike,
+                                                entry_context.option_type
+                                            )
+                                            order = self.order_manager.place_option_order(
+                                                strategy=config.STRATEGY_NAME,
+                                                underlying=config.PRIMARY_UNDERLYING,
+                                                expiry_date=expiry_date,
+                                                offset=offset,
+                                                option_type=entry_context.option_type,
+                                                action=OrderAction.BUY.value,
+                                                quantity=int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0)),
+                                                pricetype=config.DEFAULT_OPTION_PRICE_TYPE,
+                                                product=config.DEFAULT_OPTION_PRODUCT,
+                                                splitsize=config.DEFAULT_SPLIT_SIZE
+                                            )
+                                        else:
+                                            logger.error("No current expiry; cannot place optionsorder")
+                                    else:
+                                        # Legacy: resolve symbol via optionsymbol if possible
+                                        current_exp = self.expiry_manager.get_current_expiry()
+                                        order_symbol = None
+                                        if current_exp:
+                                            expiry_date = current_exp.expiry_date
+                                            offset = self.options_helper.compute_offset(
+                                                config.PRIMARY_UNDERLYING,
+                                                expiry_date,
+                                                entry_context.strike,
+                                                entry_context.option_type
+                                            )
+                                            order_symbol = self.expiry_manager.get_option_symbol_by_offset(
+                                                underlying=config.PRIMARY_UNDERLYING,
+                                                expiry_date=expiry_date,
+                                                offset=offset,
+                                                option_type=entry_context.option_type
+                                            )
+                                        if not order_symbol:
+                                            # Fallback to manual symbol build
+                                            order_symbol = self.expiry_manager.build_order_symbol(
+                                                entry_context.strike,
+                                                entry_context.option_type
+                                            )
+                                        order = self.order_manager.place_order(
+                                            exchange=config.UNDERLYING_EXCHANGE,
+                                            symbol=order_symbol,
+                                            action=OrderAction.BUY,
+                                            order_type=OrderType.LIMIT,
+                                            price=entry_context.entry_price,
+                                            quantity=int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0)),
+                                            product=ProductType.MIS
+                                        )
                                     
                                     if order:
                                         logger.info(f"Order placed successfully")

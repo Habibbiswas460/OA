@@ -23,12 +23,36 @@ class OptionsHelper:
     def __init__(self):
         self.client = api(
             api_key=config.OPENALGO_API_KEY,
-            host=config.OPENALGO_HOST
+            host=config.OPENALGO_HOST,
+            ws_url=config.OPENALGO_WS_URL
         )
         
         self.strategy = config.STRATEGY_NAME
         
         logger.info("OptionsHelper initialized")
+
+    def compute_offset(self, underlying: str, expiry_date: str, strike: float, option_type: str, exchange: str = None) -> str:
+        """Compute ITM/OTM/ATM offset label relative to ATM strike."""
+        if exchange is None:
+            exchange = config.UNDERLYING_EXCHANGE
+        atm = self.get_atm_strike(underlying, expiry_date, exchange)
+        if not atm:
+            logger.warning("ATM strike not available; defaulting to ATM")
+            return "ATM"
+        try:
+            diff = float(strike) - float(atm)
+            step = int(round(abs(diff) / 50))  # NIFTY strikes in 50 increments
+            if step == 0:
+                return "ATM"
+            if option_type.upper() == "CE":
+                # CE: strike below ATM is ITM, above ATM is OTM
+                return ("ITM" + str(step)) if diff < 0 else ("OTM" + str(step))
+            else:
+                # PE: strike above ATM is ITM, below ATM is OTM
+                return ("ITM" + str(step)) if diff > 0 else ("OTM" + str(step))
+        except Exception as e:
+            logger.error(f"Error computing offset: {e}")
+            return "ATM"
     
     def place_option_order(self, underlying, expiry_date, offset, option_type, 
                           action, quantity, price_type="MARKET", product="NRML", 

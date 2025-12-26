@@ -77,24 +77,27 @@ class PositionSizing:
         if expiry_rules:
             risk_percent = expiry_rules.get('risk_percent', None)
         
-        # Default risk percentage
+        # Default risk percentage (config already in integer percentage form)
         if risk_percent is None:
-            risk_percent = config.RISK_PER_TRADE_OPTIMAL / 100
+            risk_percent = config.RISK_PER_TRADE_OPTIMAL
         
-        # Validate risk bounds
-        if risk_percent < config.RISK_PER_TRADE_MIN / 100:
-            risk_percent = config.RISK_PER_TRADE_MIN / 100
-        if risk_percent > config.RISK_PER_TRADE_MAX / 100:
-            risk_percent = config.RISK_PER_TRADE_MAX / 100
+        # Validate risk bounds (config values already in percentage form)
+        if risk_percent < config.RISK_PER_TRADE_MIN:
+            risk_percent = config.RISK_PER_TRADE_MIN
+        if risk_percent > config.RISK_PER_TRADE_MAX:
+            risk_percent = config.RISK_PER_TRADE_MAX
+        
+        # Convert to decimal for calculations
+        risk_decimal = risk_percent / 100
         
         # Calculate SL percent
         if hard_sl_price > 0:
             sl_percent = abs((hard_sl_price - entry_price) / entry_price * 100)
         else:
-            sl_percent = config.HARD_SL_PERCENT_MIN * 100
+            sl_percent = config.HARD_SL_PERCENT_MIN
         
         # Hard SL validation
-        if sl_percent > config.HARD_SL_PERCENT_EXCEED_SKIP * 100:
+        if sl_percent > config.HARD_SL_PERCENT_EXCEED_SKIP:
             logger.warning(f"SL too wide ({sl_percent:.2f}%), trade SKIPPED")
             return PositionSize(
                 quantity=0,
@@ -107,11 +110,11 @@ class PositionSizing:
                 target_price=target_price,
                 risk_reward_ratio=0,
                 sizing_valid=False,
-                rejection_reason=f"SL too wide: {sl_percent:.2f}% (max {config.HARD_SL_PERCENT_EXCEED_SKIP * 100}%)"
+                rejection_reason=f"SL too wide: {sl_percent:.2f}% (max {config.HARD_SL_PERCENT_EXCEED_SKIP}%)"
             )
         
         # Calculate max loss allowed
-        max_loss_allowed = self.capital * risk_percent
+        max_loss_allowed = self.capital * risk_decimal
         
         # Calculate qty needed for this risk level
         loss_per_unit = abs(entry_price - hard_sl_price)
@@ -150,7 +153,7 @@ class PositionSizing:
                 target_price=target_price,
                 risk_reward_ratio=0,
                 sizing_valid=False,
-                rejection_reason=f"Insufficient capital for 1 lot ({self.min_lot_size} units) with {risk_percent*100:.1f}% risk"
+                rejection_reason=f"Insufficient capital for 1 lot ({self.min_lot_size} units) with {risk_percent:.1f}% risk"
             )
         
         # Final quantity
@@ -196,7 +199,7 @@ class PositionSizing:
         self,
         entry_price: float,
         stop_loss_percent: float,
-        risk_percent: float = config.RISK_PER_TRADE_OPTIMAL / 100,
+        risk_percent: float = None,
         expiry_rules: Optional[dict] = None
     ) -> dict:
         """
@@ -204,6 +207,9 @@ class PositionSizing:
         
         Returns dict with qty, risk, target
         """
+        # Use default if not provided
+        if risk_percent is None:
+            risk_percent = config.RISK_PER_TRADE_OPTIMAL
         sl_price = entry_price * (1 - stop_loss_percent / 100)
         target_price = entry_price * (1 + 2 * stop_loss_percent / 100)  # 1:2 RR assumption
         

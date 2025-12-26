@@ -13,6 +13,7 @@ except ImportError:
     api = None
 from config import config
 from src.utils.logger import StrategyLogger
+from src.core.order_manager import OrderManager
 
 logger = StrategyLogger.get_logger(__name__)
 
@@ -52,7 +53,8 @@ class ExpiryManager:
             try:
                 self.client = api(
                     api_key=config.OPENALGO_API_KEY,
-                    host=config.OPENALGO_HOST
+                    host=config.OPENALGO_HOST,
+                    ws_url=config.OPENALGO_WS_URL
                 )
                 logger.info("ExpiryManager initialized with OpenAlgo API")
             except Exception as e:
@@ -62,6 +64,7 @@ class ExpiryManager:
         self.available_expiries: List[ExpiryInfo] = []
         self.current_expiry: Optional[ExpiryInfo] = None
         self.selected_underlying = config.PRIMARY_UNDERLYING
+        self._order_manager = OrderManager()
         
         # Expiry-day rules
         self.expiry_day_rules = {
@@ -310,8 +313,8 @@ class ExpiryManager:
         
         adjusted_rules = {
             'max_position_size_factor': 1.0,
-            'risk_percent': config.RISK_PER_TRADE_OPTIMAL / 100,
-            'hard_sl_percent': config.HARD_SL_PERCENT_MIN * 100,
+            'risk_percent': config.RISK_PER_TRADE_OPTIMAL,  # Already in percentage form (e.g., 1)
+            'hard_sl_percent': config.HARD_SL_PERCENT_MIN,  # Already in percentage form (e.g., 5)
             'min_time_in_trade': 0,
             'max_time_in_trade': 3600,
             'entry_frequency_factor': 1.0,
@@ -322,7 +325,7 @@ class ExpiryManager:
             logger.warning("*** EXPIRY DAY ***")
             adjusted_rules = {
                 'max_position_size_factor': 0.3,  # 30% of normal
-                'risk_percent': 0.005,  # 0.5% risk only
+                'risk_percent': 0.5,  # 0.5% risk only
                 'hard_sl_percent': 3.0,  # 3% only
                 'min_time_in_trade': 20,  # Exit if profitable after 20s
                 'max_time_in_trade': 300,  # Max 5 min
@@ -333,7 +336,7 @@ class ExpiryManager:
             logger.warning("*** LAST TRADING DAY BEFORE EXPIRY ***")
             adjusted_rules = {
                 'max_position_size_factor': 0.5,
-                'risk_percent': 0.01,
+                'risk_percent': 1.0,  # 1% risk
                 'hard_sl_percent': 4.0,
                 'min_time_in_trade': 30,
                 'max_time_in_trade': 600,  # Max 10 min
@@ -344,7 +347,7 @@ class ExpiryManager:
             logger.info("Expiry week: Adjusting rules for lower volatility")
             adjusted_rules = {
                 'max_position_size_factor': 0.7,
-                'risk_percent': 0.015,
+                'risk_percent': 1.5,  # 1.5% risk
                 'hard_sl_percent': 5.0,
                 'min_time_in_trade': 30,
                 'max_time_in_trade': 900,  # 15 min
@@ -355,7 +358,7 @@ class ExpiryManager:
         logger.info(
             f"Expiry rules applied ({days_left} days): "
             f"Position size: {adjusted_rules['max_position_size_factor']*100:.0f}%, "
-            f"Risk: {adjusted_rules['risk_percent']*100:.2f}%, "
+            f"Risk: {adjusted_rules['risk_percent']:.2f}%, "
             f"SL: {adjusted_rules['hard_sl_percent']:.1f}%, "
             f"Max duration: {adjusted_rules['max_time_in_trade']}s"
         )
@@ -427,7 +430,33 @@ class ExpiryManager:
         # Example: NIFTY18800CE30DEC2025
         
         symbol = f"{underlying}{strike}{option_type}{self.current_expiry.expiry_date}"
+        logger.log_order({'type': 'SYMBOL_BUILT_MANUAL', 'symbol': symbol})
         return symbol
+
+    def get_option_symbol_by_offset(
+        self,
+        underlying: str,
+        expiry_date: str,
+        offset: str,
+        option_type: str
+    ) -> Optional[str]:
+        """Resolve option symbol using OpenAlgo `optionsymbol` via OrderManager."""
+        try:
+            resp = self._order_manager.resolve_option_symbol(
+                underlying=underlying,
+                expiry_date=expiry_date,
+                offset=offset,
+                option_type=option_type
+            )
+            if resp and resp.get('status') == 'success':
+                symbol = resp.get('symbol')
+                logger.log_order({'type': 'SYMBOL_RESOLVED', 'symbol': symbol, 'offset': offset, 'expiry_date': expiry_date})
+                return symbol
+            logger.log_order({'type': 'SYMBOL_RESOLVE_FAILED', 'response': resp})
+            return None
+        except Exception as e:
+            logger.error(f"Error resolving symbol by offset: {e}")
+            return None
     
     def build_order_symbol(self, strike: int, option_type: str) -> str:
         """

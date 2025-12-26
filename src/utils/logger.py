@@ -29,7 +29,24 @@ class StrategyLogger:
         """Get or create logger instance"""
         if name not in cls._instances:
             cls._instances[name] = cls(name)
-        return cls._instances[name].logger
+        inst = cls._instances[name]
+        lg = inst.logger
+        # Attach proxy methods for custom logging helpers if missing
+        if not hasattr(lg, 'log_order'):
+            lg.log_order = lambda order_data, _inst=inst: _inst.log_order(order_data)
+        if not hasattr(lg, 'log_trade'):
+            lg.log_trade = lambda trade_data, _inst=inst: _inst.log_trade(trade_data)
+        if not hasattr(lg, 'log_signal'):
+            lg.log_signal = lambda signal_data, _inst=inst: _inst.log_signal(signal_data)
+        if not hasattr(lg, 'log_market_data'):
+            lg.log_market_data = lambda data, _inst=inst: _inst.log_market_data(data)
+        if not hasattr(lg, 'log_risk_event'):
+            lg.log_risk_event = lambda event, _inst=inst: _inst.log_risk_event(event)
+        if not hasattr(lg, 'log_position'):
+            lg.log_position = lambda position_data, _inst=inst: _inst.log_position(position_data)
+        if not hasattr(lg, 'log_pnl'):
+            lg.log_pnl = lambda pnl_data, _inst=inst: _inst.log_pnl(pnl_data)
+        return lg
     
     def _setup_handlers(self):
         """Setup console and file handlers"""
