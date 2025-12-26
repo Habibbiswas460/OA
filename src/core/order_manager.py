@@ -118,6 +118,7 @@ class OrderManager:
     ) -> Optional[dict]:
         """
         Place an order with retry logic
+        Supports both paper trading (simulated) and live trading
         
         Args:
             exchange: NSE, BSE, MCX, NCDEX
@@ -132,7 +133,7 @@ class OrderManager:
             Order response dict or None if failed
         """
         
-        if not self.client:
+        if not self.client and not config.PAPER_TRADING:
             logger.error("OrderManager not initialized with API client")
             return None
         
@@ -143,6 +144,35 @@ class OrderManager:
                 return None
             
             if order_type == OrderType.LIMIT and price <= 0:
+                logger.warning(f"Invalid price for LIMIT order: {price}")
+                return None
+            
+            # PAPER TRADING MODE - Simulate order locally
+            if config.PAPER_TRADING:
+                import random
+                simulated_order = {
+                    'status': 'success',
+                    'orderid': f'PAPER_{int(time.time())}_{random.randint(1000, 9999)}',
+                    'exchange': exchange,
+                    'symbol': symbol,
+                    'action': action.value,
+                    'price': price,
+                    'quantity': quantity,
+                    'product': product.value,
+                    'order_type': order_type.value,
+                    'message': 'Paper order simulated locally',
+                    'timestamp': time.time()
+                }
+                
+                order_id = simulated_order['orderid']
+                self.active_orders[order_id] = simulated_order
+                
+                logger.info(
+                    f"📄 PAPER ORDER: {action.value} {quantity} {symbol} @ ₹{price:.2f} | "
+                    f"Order ID: {order_id}"
+                )
+                
+                return simulated_order
                 logger.warning(f"Invalid price for LIMIT order: {price}")
                 return None
             
