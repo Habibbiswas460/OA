@@ -189,39 +189,58 @@ class ExpiryManager:
     
     def _get_default_expiries(self) -> List[ExpiryInfo]:
         """
-        Get default weekly expiries (nearest Thursday and next Thursday)
-        Used when OpenAlgo API is not available or doesn't support option chain fetch
+        Get default weekly expiries (next 4 Tuesdays)
+        NIFTY weekly options expire every TUESDAY
+        Auto-detects next available expiry dates
         
         Returns:
-            List of two default ExpiryInfo objects for current and next week
+            List of ExpiryInfo objects for upcoming weekly expiries
         """
         today = datetime.now().date()
-        weekday = today.weekday()  # 0 = Monday, 3 = Thursday
+        current_time = datetime.now().time()
+        weekday = today.weekday()  # 0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
         
-        # Find this week's Thursday (3)
-        days_until_thursday = (3 - weekday) % 7
-        if days_until_thursday == 0 and today.weekday() == 3:
-            days_until_thursday = 0  # Today is Thursday
+        # Calculate days to next Tuesday (weekday=1)
+        if weekday < 1:
+            # Monday: Use tomorrow (Tuesday)
+            days_to_next_tuesday = 1 - weekday
+        elif weekday == 1:
+            # Tuesday: If before 15:30, use today; otherwise next week
+            if current_time.hour < 15 or (current_time.hour == 15 and current_time.minute < 30):
+                days_to_next_tuesday = 0  # Today's expiry (still valid)
+            else:
+                days_to_next_tuesday = 7  # Next Tuesday
+        else:
+            # Wednesday-Sunday: Use next Tuesday
+            days_to_next_tuesday = (7 - weekday + 1) % 7
+            if days_to_next_tuesday == 0:
+                days_to_next_tuesday = 7
         
-        this_week_expiry = today + timedelta(days=days_until_thursday if days_until_thursday > 0 else 7)
-        next_week_expiry = this_week_expiry + timedelta(days=7)
-        
-        expiry_list = [
-            ExpiryInfo(
-                expiry_date=this_week_expiry.strftime('%d%b%y').upper(),
+        # Generate next 4 weekly expiries (Tuesdays)
+        expiry_list = []
+        for week in range(4):
+            expiry_date = today + timedelta(days=days_to_next_tuesday + (week * 7))
+            days_to_exp = (expiry_date - today).days
+            
+            # Verify it's actually Tuesday
+            if expiry_date.weekday() != 1:
+                logger.error(f"Expiry calculation error: {expiry_date} is not Tuesday!")
+                continue
+            
+            expiry_list.append(ExpiryInfo(
+                expiry_date=expiry_date.strftime('%d%b%y').upper(),
                 expiry_type=ExpiryType.WEEKLY,
-                days_to_expiry=(this_week_expiry - today).days
-            ),
-            ExpiryInfo(
-                expiry_date=next_week_expiry.strftime('%d%b%y').upper(),
-                expiry_type=ExpiryType.WEEKLY,
-                days_to_expiry=(next_week_expiry - today).days
-            )
-        ]
+                days_to_expiry=days_to_exp
+            ))
         
-        logger.info(f"Using default weekly expiries (API not available)")
-        for exp in expiry_list:
-            logger.info(f"  Default Expiry: {exp.expiry_date} ({exp.days_to_expiry} days to expiry)")
+        if not expiry_list:
+            logger.error("Failed to calculate default expiries!")
+            return []
+        
+        logger.info(f"Auto-detected weekly expiries (NIFTY Tuesdays):")
+        for i, exp in enumerate(expiry_list):
+            exp_date = today + timedelta(days=exp.days_to_expiry)
+            logger.info(f"  Week {i+1}: {exp.expiry_date} - {exp_date.strftime('%A, %d %B %Y')} ({exp.days_to_expiry} days)")
         
         self.available_expiries = expiry_list
         return expiry_list
