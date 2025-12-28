@@ -18,6 +18,7 @@ from src.utils.logger import StrategyLogger
 from src.utils.data_feed import DataFeed
 from src.utils.trade_journal import TradeJournal
 from src.utils.network_resilience import get_network_monitor
+from src.utils.greeks_data_manager import GreeksDataManager
 
 # Engines
 from src.engines.bias_engine import BiasEngine, BiasState
@@ -73,6 +74,10 @@ class AngelXStrategy:
         self.trade_manager = TradeManager()
         self.trade_journal = TradeJournal()
         self.options_helper = OptionsHelper()
+        
+        # Greeks data manager for real-time Greeks and OI
+        self.greeks_manager = GreeksDataManager()
+        logger.info("Greeks data manager initialized")
         
         # Expiry manager - auto-detect from OpenAlgo
         self.expiry_manager = ExpiryManager()
@@ -205,6 +210,11 @@ class AngelXStrategy:
             # Start bias engine
             self.bias_engine.start()
             
+            # Start Greeks background refresh if enabled
+            if getattr(config, 'GREEKS_BACKGROUND_REFRESH', True) and getattr(config, 'USE_REAL_GREEKS_DATA', True):
+                self.greeks_manager.start_background_refresh()
+                logger.info("Greeks background refresh started")
+            
             # Set running flag
             self.running = True
             
@@ -313,6 +323,17 @@ class AngelXStrategy:
                                         target_price=position.target_price
                                     )
                                     
+                                    # Start tracking Greeks for this symbol
+                                    if trade and getattr(config, 'USE_REAL_GREEKS_DATA', True):
+                                        current_exp = self.expiry_manager.get_current_expiry()
+                                        if current_exp:
+                                            option_symbol = self.expiry_manager.build_order_symbol(
+                                                trade.strike,
+                                                trade.option_type
+                                            )
+                                            self.greeks_manager.track_symbol(option_symbol)
+                                            logger.info(f"Started tracking Greeks for {option_symbol}")
+                                    
                                     order = None
                                     if config.USE_MULTILEG_STRATEGY:
                                         # Place multi-leg order (straddle/strangle)
@@ -379,24 +400,103 @@ class AngelXStrategy:
                                     if order:
                                         logger.info(f"Order placed successfully")
                     else:
-                        # Update active trades
+                        # Update active trades with REAL Greeks data
                         for trade in active_trades:
+                            # Build option symbol from trade
+                            current_exp = self.expiry_manager.get_current_expiry()
+                            if not current_exp:
+                                logger.warning("No current expiry for Greeks fetch")
+                                time.sleep(1)
+                                continue
+                            
+                            option_symbol = self.expiry_manager.build_order_symbol(
+                                trade.strike, 
+                                trade.option_type
+                            )
+                            
+                            # Get real-time Greeks if enabled
+                            if getattr(config, 'USE_REAL_GREEKS_DATA', True):
+                                greeks_snapshot = self.greeks_manager.get_greeks(
+                                    symbol=option_symbol,
+                                    exchange="NFO",
+                                    underlying_symbol=config.PRIMARY_UNDERLYING,
+                                    underlying_exchange=config.UNDERLYING_EXCHANGE,
+                                    force_refresh=False  # Use cache if fresh
+                                )
+                                
+                                if not greeks_snapshot:
+                                    logger.warning(f"Failed to get Greeks for {option_symbol}, using fallback")
+                                    # Fallback based on config
+                                    if getattr(config, 'GREEKS_FALLBACK_MODE', 'LAST_KNOWN') == "SKIP_TRADE":
+                                        continue
+                                    else:
+                                        # Use trade entry Greeks as fallback (conservative)
+                                        current_delta = trade.entry_delta
+                                        current_gamma = trade.entry_gamma
+                                        current_theta = trade.entry_theta
+                                        current_iv = trade.entry_iv
+                                        current_price = ltp
+                                        current_oi = 1000  # Placeholder
+                                        prev_delta = current_delta
+                                        prev_gamma = current_gamma
+                                        prev_oi = 900
+                                        prev_price = ltp * 0.99
+                                else:
+                                    # Get previous Greeks for delta tracking
+                                    current_greeks, prev_greeks = self.greeks_manager.get_rolling_greeks(option_symbol)
+                                    
+                                    # Extract current values
+                                    current_delta = greeks_snapshot.delta
+                                    current_gamma = greeks_snapshot.gamma
+                                    current_theta = greeks_snapshot.theta
+                                    current_iv = greeks_snapshot.iv
+                                    current_price = greeks_snapshot.ltp if greeks_snapshot.ltp > 0 else ltp
+                                    current_oi = greeks_snapshot.oi
+                                    
+                                    # Get previous values
+                                    if prev_greeks:
+                                        prev_delta = prev_greeks.delta
+                                        prev_gamma = prev_greeks.gamma
+                                        prev_oi = prev_greeks.oi
+                                        prev_price = prev_greeks.ltp
+                                    else:
+                                        prev_delta = current_delta
+                                        prev_gamma = current_gamma
+                                        prev_oi = current_oi
+                                        prev_price = current_price
+                            else:
+                                # Use dummy values (old behavior for testing)
+                                current_delta = 0.5
+                                current_gamma = 0.005
+                                current_theta = 0
+                                current_iv = 25.0
+                                current_price = ltp
+                                current_oi = 1000
+                                prev_oi = 900
+                                prev_price = ltp * 0.99
+                            
+                            # Update trade with real or fallback data
                             exit_reason = self.trade_manager.update_trade(
                                 trade,
-                                current_price=ltp,
-                                current_delta=0.5,
-                                current_gamma=0.005,
-                                current_theta=0,
-                                current_iv=25.0,
-                                current_oi=1000,
-                                prev_oi=900,
-                                prev_price=ltp * 0.99,
+                                current_price=current_price,
+                                current_delta=current_delta,
+                                current_gamma=current_gamma,
+                                current_theta=current_theta,
+                                current_iv=current_iv,
+                                current_oi=current_oi,
+                                prev_oi=prev_oi,
+                                prev_price=prev_price,
                                 expiry_rules=expiry_rules
                             )
                             
                             if exit_reason:
                                 # Exit trade
                                 self.trade_manager.exit_trade(trade, exit_reason)
+                                
+                                # Stop tracking Greeks for this symbol
+                                if getattr(config, 'USE_REAL_GREEKS_DATA', True):
+                                    self.greeks_manager.untrack_symbol(option_symbol)
+                                    logger.info(f"Stopped tracking Greeks for {option_symbol}")
                                 
                                 # Log to journal
                                 self.trade_journal.log_trade(
@@ -481,6 +581,16 @@ class AngelXStrategy:
         # Disconnect and cleanup
         self.bias_engine.stop()
         self.data_feed.disconnect()
+        
+        # Stop Greeks manager and print stats
+        if hasattr(self, 'greeks_manager'):
+            self.greeks_manager.stop_background_refresh()
+            stats = self.greeks_manager.get_stats()
+            logger.info("Greeks Data Manager Stats:")
+            logger.info(f"  API Calls: {stats['api_calls_total']}")
+            logger.info(f"  Cache Hit Rate: {stats['cache_hit_rate']:.1f}%")
+            logger.info(f"  Active Symbols: {stats['active_symbols']}")
+            logger.info(f"  Cached Symbols: {stats['cached_symbols']}")
         
         # Stop network monitoring
         if hasattr(self, 'network_monitor'):
