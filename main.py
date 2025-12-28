@@ -262,10 +262,30 @@ class AngelXStrategy:
                     # Get expiry rules (lightweight, can be called every iteration)
                     expiry_rules = self.expiry_manager.apply_expiry_rules()
                     
-                    # Get latest market data
-                    ltp = self.data_feed.get_ltp(config.PRIMARY_UNDERLYING)
-                    if not ltp:
-                        time.sleep(1)  # Wait 1 second if no data (reduced CPU usage)
+                    # Get latest market data with freshness check
+                    ltp_data = self.data_feed.get_ltp_with_timestamp(config.PRIMARY_UNDERLYING)
+                    
+                    # 🔴 CHECK DATA FRESHNESS
+                    if not ltp_data:
+                        logger.warning("❌ NO DATA from broker - waiting for connection")
+                        time.sleep(2)
+                        continue
+                    
+                    ltp = ltp_data.get('price', 0)
+                    last_tick_time = ltp_data.get('timestamp')
+                    
+                    # Check if data is stale (older than 5 seconds)
+                    if last_tick_time:
+                        age_sec = (datetime.now() - last_tick_time).total_seconds()
+                        if age_sec > 5:  # config.DATA_FRESHNESS_TOLERANCE
+                            logger.error(f"❌ STALE DATA: Last tick {age_sec:.1f}s old - HALTING trades")
+                            logger.error(f"   WebSocket may be disconnected. Waiting for fresh data...")
+                            time.sleep(3)
+                            continue
+                    
+                    if not ltp or ltp <= 0:
+                        logger.warning("Invalid LTP received, waiting...")
+                        time.sleep(1)
                         continue
                     
                     # Update market state
@@ -276,26 +296,96 @@ class AngelXStrategy:
                     active_trades = self.trade_manager.get_active_trades()
                     
                     if len(active_trades) == 0:
-                        # Look for entry
+                        # Look for entry - USING REAL GREEKS DATA
+                        # Get ATM strike and build Greeks data
+                        atm_strike = self.strike_selection.get_atm_strike(ltp)
+                        current_exp = self.expiry_manager.get_current_expiry()
+                        
+                        if not current_exp:
+                            logger.warning("No current expiry - cannot fetch Greeks")
+                            time.sleep(1)
+                            continue
+                        
+                        # Build option symbol
+                        current_option_type = "CE" if bias_state.value == "bullish" else "PE"
+                        option_symbol = self.expiry_manager.build_order_symbol(
+                            atm_strike,
+                            current_option_type
+                        )
+                        
+                        # Get real Greeks from API
+                        greeks_data = self.greeks_manager.get_greeks(
+                            symbol=option_symbol,
+                            exchange="NFO",
+                            underlying_symbol=config.PRIMARY_UNDERLYING,
+                            underlying_exchange=config.UNDERLYING_EXCHANGE,
+                            force_refresh=True  # Force refresh for entry decision
+                        )
+                        
+                        # Get previous Greeks for delta/gamma comparison
+                        current_greeks, prev_greeks = self.greeks_manager.get_rolling_greeks(option_symbol)
+                        
+                        # Validate we have real data before proceeding
+                        if not greeks_data:
+                            logger.warning(f"❌ Failed to get real Greeks for {option_symbol} - SKIPPING entry")
+                            time.sleep(2)
+                            continue
+                        
+                        # Extract real values
+                        current_delta = greeks_data.delta
+                        current_gamma = greeks_data.gamma
+                        current_iv = greeks_data.iv
+                        current_oi = greeks_data.oi
+                        current_ltp = greeks_data.ltp if greeks_data.ltp > 0 else ltp
+                        current_volume = greeks_data.volume
+                        bid = greeks_data.bid
+                        ask = greeks_data.ask
+                        
+                        # Previous values
+                        if prev_greeks:
+                            prev_delta = prev_greeks.delta
+                            prev_gamma = prev_greeks.gamma
+                            prev_iv = prev_greeks.iv
+                            prev_oi = prev_greeks.oi
+                            prev_ltp = prev_greeks.ltp
+                            prev_volume = prev_greeks.volume
+                        else:
+                            # First time - use current as previous
+                            prev_delta = current_delta
+                            prev_gamma = current_gamma
+                            prev_iv = current_iv
+                            prev_oi = current_oi
+                            prev_ltp = current_ltp
+                            prev_volume = current_volume
+                        
+                        # Calculate spread percentage
+                        current_spread_percent = ((ask - bid) / current_ltp * 100) if current_ltp > 0 else 0
+                        oi_change = current_oi - prev_oi
+                        
+                        logger.info(f"Entry Signal Check for {option_symbol}")
+                        logger.info(f"  Greeks: Δ={current_delta:.4f}, Γ={current_gamma:.4f}, IV={current_iv:.2f}%")
+                        logger.info(f"  OI: {current_oi} (Δ={oi_change}), Spread: {current_spread_percent:.2f}%")
+                        
+                        # Entry with REAL Greeks data
                         entry_context = self.entry_engine.check_entry_signal(
                             bias_state=bias_state.value,
                             bias_confidence=bias_confidence,
-                            current_delta=0.5,  # Placeholder
-                            prev_delta=0.45,
-                            current_gamma=0.005,
-                            prev_gamma=0.004,
-                            current_oi=1000,
-                            current_oi_change=100,
-                            current_ltp=ltp,
-                            prev_ltp=ltp * 0.99,
-                            current_volume=500,
-                            prev_volume=450,
-                            current_iv=25.0,
-                            prev_iv=24.5,
-                            bid=ltp * 0.995,
-                            ask=ltp * 1.005,
-                            selected_strike=18800,
-                            current_spread_percent=0.5
+                            current_delta=current_delta,           # ✅ REAL
+                            prev_delta=prev_delta,                 # ✅ REAL
+                            current_gamma=current_gamma,           # ✅ REAL
+                            prev_gamma=prev_gamma,                 # ✅ REAL
+                            current_oi=current_oi,                 # ✅ REAL
+                            current_oi_change=oi_change,           # ✅ REAL
+                            current_ltp=current_ltp,               # ✅ REAL
+                            prev_ltp=prev_ltp,                     # ✅ REAL
+                            current_volume=current_volume,         # ✅ REAL
+                            prev_volume=prev_volume,               # ✅ REAL
+                            current_iv=current_iv,                 # ✅ REAL
+                            prev_iv=prev_iv,                       # ✅ REAL
+                            bid=bid,                               # ✅ REAL
+                            ask=ask,                               # ✅ REAL
+                            selected_strike=atm_strike,            # ✅ REAL ATM
+                            current_spread_percent=current_spread_percent  # ✅ REAL
                         )
                         
                         if entry_context and entry_context.signal != EntrySignal.NO_SIGNAL:
@@ -309,12 +399,35 @@ class AngelXStrategy:
                                 )
                                 
                                 if position.sizing_valid:
+                                    # 🔴 MANDATORY: Check risk manager before entry
+                                    # This prevents account blow-up and daily limits
+                                    qty = int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0))
+                                    risk_amount = qty * (entry_context.entry_price - position.hard_sl_price)
+                                    
+                                    # Risk manager check
+                                    from src.core.risk_manager import RiskManager
+                                    risk_mgr = RiskManager()
+                                    can_trade, risk_reason = risk_mgr.can_take_trade({
+                                        'quantity': qty,
+                                        'risk_amount': risk_amount,
+                                        'entry_price': entry_context.entry_price,
+                                        'sl_price': position.hard_sl_price
+                                    })
+                                    
+                                    if not can_trade:
+                                        logger.warning(f"⚠️  Trade BLOCKED by Risk Manager: {risk_reason}")
+                                        logger.warning(f"   Entry: ₹{entry_context.entry_price:.2f}, SL: ₹{position.hard_sl_price:.2f}, Risk: ₹{risk_amount:.2f}")
+                                        continue  # Skip this entry
+                                    
+                                    logger.info(f"✅ Risk Manager: APPROVED")
+                                    logger.info(f"   Daily P&L: {risk_mgr.get_daily_pnl():.2f}, Daily Risk: {risk_mgr.get_daily_risk_used():.2f}%")
+                                    
                                     # Enter trade
                                     trade = self.trade_manager.enter_trade(
                                         option_type=entry_context.option_type,
                                         strike=entry_context.strike,
                                         entry_price=entry_context.entry_price,
-                                        quantity=int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0)),
+                                        quantity=qty,
                                         entry_delta=entry_context.entry_delta,
                                         entry_gamma=entry_context.entry_gamma,
                                         entry_theta=entry_context.entry_theta,
@@ -397,8 +510,29 @@ class AngelXStrategy:
                                             product=ProductType.MIS
                                         )
                                     
-                                    if order:
-                                        logger.info(f"Order placed successfully")
+                                    # 🔴 VALIDATE ORDER PLACEMENT
+                                    if not order:
+                                        logger.error(f"❌ Order placement FAILED - returned None")
+                                        logger.error(f"   Symbol: {order_symbol}, Price: {entry_context.entry_price}")
+                                        # Don't record trade - order wasn't placed
+                                        continue
+                                    
+                                    if isinstance(order, dict) and order.get('status') != 'success':
+                                        logger.error(f"❌ Order REJECTED by broker")
+                                        logger.error(f"   Error: {order.get('message', 'Unknown error')}")
+                                        # Don't record trade - order was rejected
+                                        continue
+                                    
+                                    order_id = order.get('orderid') if isinstance(order, dict) else getattr(order, 'orderid', None)
+                                    if not order_id:
+                                        logger.error(f"❌ Order placed but NO ORDER ID returned")
+                                        logger.error(f"   Cannot track order status")
+                                        continue
+                                    
+                                    # 🟢 ORDER VALIDATED SUCCESSFULLY
+                                    logger.info(f"✅ Order placed successfully")
+                                    logger.info(f"   Order ID: {order_id}")
+                                    logger.info(f"   Symbol: {order_symbol}, Qty: {int(position.quantity)}, Price: ₹{entry_context.entry_price:.2f}")
                     else:
                         # Update active trades with REAL Greeks data
                         for trade in active_trades:
@@ -425,22 +559,10 @@ class AngelXStrategy:
                                 )
                                 
                                 if not greeks_snapshot:
-                                    logger.warning(f"Failed to get Greeks for {option_symbol}, using fallback")
-                                    # Fallback based on config
-                                    if getattr(config, 'GREEKS_FALLBACK_MODE', 'LAST_KNOWN') == "SKIP_TRADE":
-                                        continue
-                                    else:
-                                        # Use trade entry Greeks as fallback (conservative)
-                                        current_delta = trade.entry_delta
-                                        current_gamma = trade.entry_gamma
-                                        current_theta = trade.entry_theta
-                                        current_iv = trade.entry_iv
-                                        current_price = ltp
-                                        current_oi = 1000  # Placeholder
-                                        prev_delta = current_delta
-                                        prev_gamma = current_gamma
-                                        prev_oi = 900
-                                        prev_price = ltp * 0.99
+                                    logger.error(f"❌ CRITICAL: No Greeks data for {option_symbol} - SKIPPING trade update")
+                                    logger.error(f"   This prevents decision-making with fake data. Trade will be checked next iteration.")
+                                    # SKIP this trade update - don't manage with fake OI
+                                    continue
                                 else:
                                     # Get previous Greeks for delta tracking
                                     current_greeks, prev_greeks = self.greeks_manager.get_rolling_greeks(option_symbol)

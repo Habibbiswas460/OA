@@ -460,6 +460,21 @@ class DataFeed:
         with self.data_lock:
             return self.ltp_data.get(symbol, {}).get('price')
     
+    def get_ltp_with_timestamp(self, symbol):
+        """Get LTP with timestamp for freshness checking
+        
+        Returns:
+            {'price': float, 'timestamp': datetime} or None
+        """
+        with self.data_lock:
+            ltp_data = self.ltp_data.get(symbol)
+            if not ltp_data:
+                return None
+            return {
+                'price': ltp_data.get('price'),
+                'timestamp': ltp_data.get('timestamp')
+            }
+    
     def get_quote(self, symbol):
         """Get quote data for symbol"""
         with self.data_lock:
