@@ -12,6 +12,7 @@ from typing import Optional, List
 from config import config
 from src.utils.logger import StrategyLogger
 from src.core.order_manager import OrderManager
+from src.utils.slippage_calculator import SlippageCalculator
 
 logger = StrategyLogger.get_logger(__name__)
 
@@ -38,7 +39,12 @@ class Trade:
     pnl: float
     pnl_percent: float
     time_in_trade_sec: int = 0  # Added for expiry-day management
-
+    # Realistic costs
+    entry_slippage: float = 0.0  # Slippage on entry in rupees
+    exit_slippage: float = 0.0   # Slippage on exit in rupees
+    brokerage_cost: float = 0.0  # Total brokerage + taxes
+    net_pnl: float = 0.0         # P&L after costs
+    net_pnl_percent: float = 0.0 # P&L % after costs
 
 class TradeManager:
     """
@@ -198,8 +204,42 @@ class TradeManager:
         trade.pnl = (current_price - trade.entry_price) * trade.quantity
         trade.pnl_percent = ((current_price - trade.entry_price) / trade.entry_price * 100) if trade.entry_price > 0 else 0
         
+        # Calculate realistic P&L with slippage and fees
+        if getattr(config, 'USE_REALISTIC_SLIPPAGE', False) or getattr(config, 'USE_REALISTIC_FEES', False):
+            slippage_calc = SlippageCalculator(broker=getattr(config, 'BROKER_NAME', 'angel'))
+            
+            # Calculate costs (use bid/ask if available, else assume spread of 0.1%)
+            bid_price = current_price * 0.9995  # Conservative estimate
+            ask_price = current_price * 1.0005
+            
+            exit_slippage_info = slippage_calc.calculate_exit_slippage(
+                ltp=current_price,
+                bid=bid_price,
+                ask=ask_price,
+                quantity=trade.quantity,
+                volatility=getattr(config, 'EXIT_SLIPPAGE_VOLATILITY', 'normal')
+            )
+            
+            # For entry, use historical slippage if tracked, else estimate
+            entry_slippage = getattr(trade, 'entry_slippage', 0.0)
+            exit_slippage = exit_slippage_info['slippage_amount']
+            
+            # Calculate realistic P&L
+            pnl_detail = slippage_calc.calculate_realistic_pnl(
+                entry_price=trade.entry_price,
+                exit_price=current_price,
+                quantity=trade.quantity,
+                entry_slippage=entry_slippage,
+                exit_slippage=exit_slippage
+            )
+            
+            trade.exit_slippage = exit_slippage
+            trade.brokerage_cost = pnl_detail['total_cost']
+            trade.net_pnl = pnl_detail['net_pnl']
+            trade.net_pnl_percent = pnl_detail['net_pnl_percent']
+        
         # Update time in trade
-        trade.time_in_trade_sec = (datetime.now() - trade.entry_time).total_seconds()
+        trade.time_in_trade_sec = int((datetime.now() - trade.entry_time).total_seconds())
         
         # Check exit triggers (with expiry rules if applicable)
         exit_reason = self._check_exit_triggers(
