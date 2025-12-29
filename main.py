@@ -19,6 +19,7 @@ from src.utils.data_feed import DataFeed
 from src.utils.trade_journal import TradeJournal
 from src.utils.network_resilience import get_network_monitor
 from src.utils.greeks_data_manager import GreeksDataManager
+from src.utils.session_logger import get_session_logger, end_current_session
 
 # Engines
 from src.engines.bias_engine import BiasEngine, BiasState
@@ -56,7 +57,29 @@ class AngelXStrategy:
         """Initialize ANGEL-X strategy"""
         logger.info("="*80)
         logger.info("ANGEL-X STRATEGY INITIALIZATION")
+        logger.info(f"Mode: {'DEMO' if config.DEMO_MODE else 'LIVE'}")
         logger.info("="*80)
+        
+        # If demo mode, skip expensive init
+        if config.DEMO_MODE:
+            logger.info("DEMO_MODE enabled - using simulation")
+            self.running = False
+            self.state_lock = Lock()
+            self.session_logger = get_session_logger()
+            self.session_logger.set_mode("PAPER")
+            logger.info("Demo mode ready - minimal components initialized")
+            return
+        
+        # Initialize session logger
+        self.session_logger = get_session_logger()
+        mode = "PAPER" if config.PAPER_TRADING else "LIVE"
+        self.session_logger.set_mode(mode)
+        self.session_logger.log_event('STRATEGY_INIT', {
+            'mode': mode,
+            'symbol': config.SYMBOL,
+            'max_daily_loss': config.MAX_DAILY_LOSS
+        })
+        logger.info(f"Session logger initialized: {self.session_logger.session_id}")
         
         # Initialize network monitor for local network resilience
         self.network_monitor = get_network_monitor()
@@ -80,8 +103,14 @@ class AngelXStrategy:
         logger.info("Greeks data manager initialized")
         
         # Expiry manager - auto-detect from OpenAlgo
-        self.expiry_manager = ExpiryManager()
-        self.expiry_manager.refresh_expiry_chain(config.PRIMARY_UNDERLYING)
+        try:
+            self.expiry_manager = ExpiryManager()
+            if not config.DEMO_MODE:
+                self.expiry_manager.refresh_expiry_chain(config.PRIMARY_UNDERLYING)
+            logger.info("Expiry manager initialized")
+        except Exception as e:
+            logger.warning(f"Expiry manager init failed (demo mode): {e}")
+            self.expiry_manager = ExpiryManager()
         
         # Strategy state
         self.running = False
@@ -389,6 +418,15 @@ class AngelXStrategy:
                         )
                         
                         if entry_context and entry_context.signal != EntrySignal.NO_SIGNAL:
+                            # Log entry signal to session
+                            self.session_logger.log_event('ENTRY_SIGNAL', {
+                                'signal': entry_context.signal.name,
+                                'strike': entry_context.strike,
+                                'option_type': entry_context.option_type,
+                                'entry_price': entry_context.entry_price,
+                                'delta': entry_context.entry_delta
+                            })
+                            
                             # Validate entry quality
                             if self.entry_engine.validate_entry_quality(entry_context):
                                 # Calculate position size
@@ -417,6 +455,9 @@ class AngelXStrategy:
                                     if not can_trade:
                                         logger.warning(f"⚠️  Trade BLOCKED by Risk Manager: {risk_reason}")
                                         logger.warning(f"   Entry: ₹{entry_context.entry_price:.2f}, SL: ₹{position.hard_sl_price:.2f}, Risk: ₹{risk_amount:.2f}")
+                                        
+                                        # Log risk block to session
+                                        self.session_logger.log_warning('RISK_BLOCK', f'{risk_reason} | Risk: ₹{risk_amount:.2f}')
                                         continue  # Skip this entry
                                     
                                     logger.info(f"✅ Risk Manager: APPROVED")
@@ -435,6 +476,18 @@ class AngelXStrategy:
                                         sl_price=position.hard_sl_price,
                                         target_price=position.target_price
                                     )
+                                    
+                                    # Log trade entry to session
+                                    if trade:
+                                        self.session_logger.log_trade({
+                                            'action': 'ENTRY',
+                                            'symbol': f"{entry_context.strike}{entry_context.option_type}",
+                                            'entry_price': entry_context.entry_price,
+                                            'quantity': qty,
+                                            'delta': entry_context.entry_delta,
+                                            'sl_price': position.hard_sl_price,
+                                            'target_price': position.target_price
+                                        })
                                     
                                     # Start tracking Greeks for this symbol
                                     if trade and getattr(config, 'USE_REAL_GREEKS_DATA', True):
@@ -713,6 +766,12 @@ class AngelXStrategy:
             logger.info(f"  Cache Hit Rate: {stats['cache_hit_rate']:.1f}%")
             logger.info(f"  Active Symbols: {stats['active_symbols']}")
             logger.info(f"  Cached Symbols: {stats['cached_symbols']}")
+            
+            # Update session metrics
+            self.session_logger.update_metrics({
+                'greeks_api_calls': stats['api_calls_total'],
+                'cache_hit_rate': stats['cache_hit_rate']
+            })
         
         # Stop network monitoring
         if hasattr(self, 'network_monitor'):
@@ -736,6 +795,16 @@ class AngelXStrategy:
         logger.info(f"Daily P&L: ₹{self.daily_pnl:.2f}")
         logger.info("="*80)
         
+        # Update final session metrics and end session
+        self.session_logger.update_metrics({
+            'total_trades': stats['total'],
+            'wins': stats['wins'],
+            'losses': stats['losses'],
+            'total_pnl': stats['total_pnl']
+        })
+        self.session_logger.end_session(reason="STRATEGY_STOP")
+        logger.info(f"Session ended and saved to: {self.session_logger.session_dir}")
+        
         # Export summary
         self.trade_journal.print_daily_summary()
         self.trade_journal.export_summary_report()
@@ -744,6 +813,16 @@ class AngelXStrategy:
 def main():
     """Main entry point"""
     strategy = AngelXStrategy()
+    
+    # Skip start() in demo mode - just show it's ready
+    if config.DEMO_MODE:
+        logger.info("DEMO MODE: Strategy initialized and ready")
+        logger.info("To start live trading, set DEMO_MODE = False in config")
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        return
+    
     strategy.start()
 
 

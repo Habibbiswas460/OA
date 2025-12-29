@@ -18,11 +18,11 @@ LOG_DIR = "./logs"
 # ============================================================================
 # OpenAlgo API Configuration
 # ============================================================================
-OPENALGO_API_KEY = "your_api_key_here"  # Replace with your actual API key
-OPENALGO_HOST = "http://127.0.0.1:5000"  # Replace with your OpenAlgo server
-OPENALGO_WS_URL = "ws://127.0.0.1:8765"  # Replace with your WebSocket URL
+OPENALGO_API_KEY = "9f9607c800af242c7efe0527d9019b196939af8d97a42d7096e356900fbe29b0"  # Replace with your actual API key
+OPENALGO_HOST = "http://habiqx.cc:5000"  # Replace with your OpenAlgo server
+OPENALGO_WS_URL = "ws://habiqx.cc:8765"  # Replace with your WebSocket URL
 STRATEGY_NAME = "ANGEL-X"
-OPENALGO_CLIENT_ID = "your_client_id"  # Replace with your client ID
+OPENALGO_CLIENT_ID = "your_client_id" 
 
 # ============================================================================
 # SYMBOL CONFIGURATION - ANGEL-X ALLOWED INSTRUMENTS
