@@ -1,0 +1,2 @@
+{"timestamp": "2025-12-30T10:49:29.692268", "type": "SESSION_START", "data": {"session_id": "session_20251230_104929", "timestamp": "2025-12-30T10:49:29.692066"}}
+{"timestamp": "2025-12-30T10:49:30.192580", "type": "STRATEGY_INIT", "data": {"mode": "PAPER", "symbol": "NIFTY", "max_daily_loss": 3000}}

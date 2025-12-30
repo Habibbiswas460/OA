@@ -215,25 +215,48 @@ class GreeksDataManager:
                 with self.data_lock:
                     return self.greeks_cache.get(symbol)
             
+            # Extract Greeks data from response
+            # OpenAlgo response format: {'status': 'success', 'data': {'greeks': {...}, 'quote': {...}}}
             data = response.get('data', {})
-            greeks_data = data.get('greeks', {})
-            quote_data = data.get('quote', {})
+            greeks_data = data.get('greeks', {}) or response.get('greeks', {})
+            quote_data = data.get('quote', {}) or response.get('quote', {})
             
-            # Create snapshot
+            # Fallback: if greeks directly in response
+            if not greeks_data:
+                greeks_data = {
+                    'delta': response.get('delta', 0.0),
+                    'gamma': response.get('gamma', 0.0),
+                    'theta': response.get('theta', 0.0),
+                    'vega': response.get('vega', 0.0),
+                    'rho': response.get('rho', 0.0),
+                    'iv': response.get('iv', 0.0)
+                }
+            
+            if not quote_data:
+                quote_data = {
+                    'ltp': response.get('ltp', 0.0),
+                    'bid': response.get('bid', 0.0),
+                    'ask': response.get('ask', 0.0),
+                    'volume': response.get('volume', 0),
+                    'oi': response.get('oi', 0),
+                    'oi_change': response.get('oi_change', 0.0)
+                }
+            
+            # Create snapshot with proper data extraction
             snapshot = GreeksSnapshot(
                 symbol=symbol,
                 timestamp=datetime.now(),
-                delta=greeks_data.get('delta', 0.0),
-                gamma=greeks_data.get('gamma', 0.0),
-                theta=greeks_data.get('theta', 0.0),
-                vega=greeks_data.get('vega', 0.0),
-                iv=greeks_data.get('iv', 0.0),
-                ltp=quote_data.get('ltp', 0.0),
-                bid=quote_data.get('bid', 0.0),
-                ask=quote_data.get('ask', 0.0),
-                volume=quote_data.get('volume', 0),
-                oi=quote_data.get('oi', 0),
-                oi_change=quote_data.get('oi_change', 0.0)
+                delta=float(greeks_data.get('delta', 0.0)) if greeks_data.get('delta') else 0.0,
+                gamma=float(greeks_data.get('gamma', 0.0)) if greeks_data.get('gamma') else 0.0,
+                theta=float(greeks_data.get('theta', 0.0)) if greeks_data.get('theta') else 0.0,
+                vega=float(greeks_data.get('vega', 0.0)) if greeks_data.get('vega') else 0.0,
+                iv=float(greeks_data.get('iv', 0.0)) if greeks_data.get('iv') else 0.0,
+                ltp=float(quote_data.get('ltp', 0.0)) if quote_data.get('ltp') else 0.0,
+                bid=float(quote_data.get('bid', 0.0)) if quote_data.get('bid') else 0.0,
+                ask=float(quote_data.get('ask', 0.0)) if quote_data.get('ask') else 0.0,
+                volume=int(quote_data.get('volume', 0)) if quote_data.get('volume') else 0,
+                oi=int(quote_data.get('oi', 0)) if quote_data.get('oi') else 0,
+                oi_change=float(quote_data.get('oi_change', 0.0)) if quote_data.get('oi_change') else 0.0
             )
             
             # Update cache and rolling state
@@ -376,3 +399,190 @@ class GreeksDataManager:
             
             if stale_symbols or stale_chains:
                 logger.debug(f"Cleared {len(stale_symbols)} stale Greeks, {len(stale_chains)} stale chains")
+    
+    # ============================================================================
+    # GREEKS VALIDATION & ANALYSIS ENHANCEMENTS
+    # ============================================================================
+    
+    def validate_option_health(self, greeks: GreeksSnapshot) -> Dict[str, bool]:
+        """
+        Validate Greeks health for trading
+        
+        Returns dict with validation results:
+        - 'delta_ok': Delta within acceptable range
+        - 'gamma_ok': Gamma is positive
+        - 'theta_ok': Theta decay acceptable
+        - 'vega_ok': Vega not too high
+        - 'liquidity_ok': Volume/OI sufficient
+        - 'spread_ok': Bid-ask spread reasonable
+        """
+        if not greeks:
+            return {k: False for k in ['delta_ok', 'gamma_ok', 'theta_ok', 'vega_ok', 'liquidity_ok', 'spread_ok']}
+        
+        # Delta validation (0.2 to 0.8 for scalping)
+        delta_ok = 0.2 <= abs(greeks.delta) <= 0.8
+        
+        # Gamma validation (positive, >= 0.001)
+        gamma_ok = greeks.gamma > 0.0008
+        
+        # Theta validation (not too negative)
+        theta_ok = greeks.theta > -100  # Avoid extreme theta decay
+        
+        # Vega validation (not too high for short-term scalp)
+        vega_ok = greeks.vega < 50  # Limit vega exposure
+        
+        # Liquidity validation (volume + OI)
+        liquidity_ok = (greeks.volume >= getattr(config, 'MIN_VOLUME_THRESHOLD', 100) or 
+                        greeks.oi >= getattr(config, 'MIN_OI_THRESHOLD', 1000))
+        
+        # Spread validation
+        if greeks.ltp > 0:
+            spread_pct = ((greeks.ask - greeks.bid) / greeks.ltp * 100) if greeks.ask > greeks.bid else 100
+            spread_ok = spread_pct <= getattr(config, 'MAX_SPREAD_PERCENT', 2.0)
+        else:
+            spread_ok = False
+        
+        return {
+            'delta_ok': delta_ok,
+            'gamma_ok': gamma_ok,
+            'theta_ok': theta_ok,
+            'vega_ok': vega_ok,
+            'liquidity_ok': liquidity_ok,
+            'spread_ok': spread_ok
+        }
+    
+    def get_greeks_quality_score(self, greeks: GreeksSnapshot) -> float:
+        """
+        Calculate option quality score (0-100)
+        Higher score = better option for trading
+        """
+        if not greeks:
+            return 0.0
+        
+        score = 0.0
+        
+        # Delta score (0-25): prefer 0.3-0.7
+        delta_abs = abs(greeks.delta)
+        if 0.3 <= delta_abs <= 0.7:
+            score += 25
+        elif 0.2 <= delta_abs <= 0.8:
+            score += 15
+        elif delta_abs > 0:
+            score += 5
+        
+        # Gamma score (0-25): higher is better
+        if greeks.gamma > 0.003:
+            score += 25
+        elif greeks.gamma > 0.001:
+            score += 15
+        elif greeks.gamma > 0:
+            score += 5
+        
+        # Theta score (0-20): moderate decay
+        theta_abs = abs(greeks.theta)
+        if 5 <= theta_abs <= 50:
+            score += 20
+        elif 1 <= theta_abs <= 100:
+            score += 10
+        elif theta_abs > 0:
+            score += 5
+        
+        # Vega score (0-15): low vega exposure
+        if greeks.vega < 10:
+            score += 15
+        elif greeks.vega < 30:
+            score += 10
+        elif greeks.vega < 50:
+            score += 5
+        
+        # Liquidity score (0-15)
+        if greeks.volume >= 1000 or greeks.oi >= 10000:
+            score += 15
+        elif greeks.volume >= 100 or greeks.oi >= 1000:
+            score += 10
+        elif greeks.volume > 0 or greeks.oi > 0:
+            score += 5
+        
+        return min(100.0, score)
+    
+    def compare_greeks_change(self, current: Optional[GreeksSnapshot], 
+                              prev: Optional[GreeksSnapshot]) -> Dict[str, float]:
+        """
+        Compare current vs previous Greeks
+        
+        Returns:
+        - 'delta_change': Change in delta
+        - 'gamma_change': Change in gamma
+        - 'theta_change': Change in theta
+        - 'vega_change': Change in vega
+        - 'oi_change_pct': OI change percentage
+        """
+        if not current or not prev:
+            return {}
+        
+        return {
+            'delta_change': current.delta - prev.delta,
+            'gamma_change': current.gamma - prev.gamma,
+            'theta_change': current.theta - prev.theta,
+            'vega_change': current.vega - prev.vega,
+            'oi_change_pct': ((current.oi - prev.oi) / prev.oi * 100) if prev.oi > 0 else 0,
+            'price_change': current.ltp - prev.ltp
+        }
+    
+    def get_entry_greeks_signal(self, greeks: GreeksSnapshot, option_type: str = "CE") -> Dict[str, bool]:
+        """
+        Generate entry signal based on Greeks
+        
+        Args:
+            greeks: Greeks snapshot
+            option_type: "CE" or "PE"
+            
+        Returns:
+            {'delta_signal': bool, 'gamma_signal': bool, 'entry_ready': bool}
+        """
+        if not greeks or greeks.ltp == 0:
+            return {'delta_signal': False, 'gamma_signal': False, 'entry_ready': False}
+        
+        # For CE: prefer positive delta rising
+        # For PE: prefer negative delta falling
+        if option_type == "CE":
+            delta_signal = 0.3 <= greeks.delta <= 0.8  # Positive delta preferred
+        else:  # PE
+            delta_signal = -0.8 <= greeks.delta <= -0.3  # Negative delta preferred
+        
+        # Gamma should be positive and reasonable
+        gamma_signal = 0.0008 <= greeks.gamma <= 0.01
+        
+        # Entry ready if both delta and gamma are good
+        entry_ready = delta_signal and gamma_signal
+        
+        return {
+            'delta_signal': delta_signal,
+            'gamma_signal': gamma_signal,
+            'entry_ready': entry_ready,
+            'quality_score': self.get_greeks_quality_score(greeks)
+        }
+    
+    def get_rolling_iv_trend(self, symbol: str, window: int = 5) -> Optional[str]:
+        """
+        Determine IV trend (RISING, FALLING, STABLE)
+        
+        Note: Requires historical tracking of IV changes
+        """
+        with self.data_lock:
+            current = self.current_greeks.get(symbol)
+            prev = self.prev_greeks.get(symbol)
+        
+        if not current or not prev or current.iv == 0:
+            return None
+        
+        iv_change = current.iv - prev.iv
+        
+        if iv_change > 1.0:
+            return "RISING"
+        elif iv_change < -1.0:
+            return "FALLING"
+        else:
+            return "STABLE"
+
+

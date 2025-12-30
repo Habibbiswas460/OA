@@ -115,6 +115,21 @@ class StrikeSelectionEngine:
         self.last_scan_time = None
         logger.info("StrikeSelectionEngine initialized")
     
+    def get_atm_strike(self, underlying_price: float, strike_interval: int = 100) -> int:
+        """
+        Get ATM strike for given underlying price
+        
+        Args:
+            underlying_price: Current underlying LTP
+            strike_interval: Strike interval (e.g., 100 for NIFTY)
+            
+        Returns:
+            Rounded ATM strike price
+        """
+        # Round to nearest strike interval
+        atm_strike = round(underlying_price / strike_interval) * strike_interval
+        return int(atm_strike)
+    
     def scan_and_select_best_strike(
         self,
         available_strikes: List[OptionStrike],

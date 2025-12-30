@@ -63,15 +63,7 @@ class OrderManager:
         self.active_orders = {}
         self.order_counter = 0
 
-    def _simulate_response(self, payload: dict) -> dict:
-        """Simulate an order response in PAPER_TRADING mode"""
-        import random
-        sim = {
-            'status': 'success',
-            'orderid': f"PAPER_{int(time.time())}_{random.randint(1000,9999)}"
-        }
-        sim.update(payload)
-        return sim
+    # _simulate_response() removed - using OpenAlgo's native paper trading account
     
     def _api_call_with_retry(self, api_func, *args, **kwargs):
         """
@@ -144,7 +136,7 @@ class OrderManager:
             Order response dict or None if failed
         """
         
-        if not self.client and not config.PAPER_TRADING:
+        if not self.client:
             logger.error("OrderManager not initialized with API client")
             return None
         
@@ -157,27 +149,6 @@ class OrderManager:
             if order_type == OrderType.LIMIT and price <= 0:
                 logger.warning(f"Invalid price for LIMIT order: {price}")
                 return None
-            
-            # PAPER TRADING MODE - Simulate order locally
-            if config.PAPER_TRADING:
-                simulated_order = self._simulate_response({
-                    'exchange': exchange,
-                    'symbol': symbol,
-                    'action': action.value,
-                    'price': price,
-                    'quantity': quantity,
-                    'product': product.value,
-                    'order_type': order_type.value,
-                    'message': 'Paper order simulated locally',
-                    'timestamp': time.time()
-                })
-                order_id = simulated_order['orderid']
-                self.active_orders[order_id] = simulated_order
-                logger.info(
-                    f"📄 PAPER ORDER: {action.value} {quantity} {symbol} @ ₹{price:.2f} | "
-                    f"Order ID: {order_id}"
-                )
-                return simulated_order
                 logger.warning(f"Invalid price for LIMIT order: {price}")
                 return None
             
@@ -218,14 +189,6 @@ class OrderManager:
     def resolve_option_symbol(self, underlying: str, expiry_date: str, offset: str, option_type: str) -> Optional[dict]:
         """Resolve an option symbol via OpenAlgo optionsymbol"""
         try:
-            if config.PAPER_TRADING:
-                # Simulate symbol resolution
-                return {
-                    'status': 'success',
-                    'symbol': f"{underlying}{expiry_date}{offset}{option_type}",
-                    'exchange': 'NFO',
-                    'lotsize': config.MINIMUM_LOT_SIZE
-                }
             if not self.client:
                 return None
             resp = self._api_call_with_retry(
@@ -272,11 +235,6 @@ class OrderManager:
                 'splitsize': splitsize
             }
             logger.log_order({'type': 'OPTIONSORDER_INTENT', **payload})
-            if config.PAPER_TRADING:
-                sim = self._simulate_response(payload)
-                self.active_orders[sim['orderid']] = sim
-                logger.info(f"📄 PAPER OPTIONS ORDER: {payload}")
-                return sim
             if not self.client:
                 logger.error("OpenAlgo client not initialized")
                 return None
@@ -316,11 +274,6 @@ class OrderManager:
                 payload['expiry_date'] = expiry_date
             payload['legs'] = legs
             logger.log_order({'type': 'MULTIORDER_INTENT', **payload})
-            if config.PAPER_TRADING:
-                sim = self._simulate_response(payload)
-                logger.info(f"📄 PAPER OPTIONS MULTI ORDER: {payload}")
-                logger.log_order({'type': 'MULTIORDER_PAPER', 'response': sim})
-                return sim
             if not self.client:
                 logger.error("OpenAlgo client not initialized")
                 return None
@@ -344,10 +297,6 @@ class OrderManager:
     def place_basket_order(self, orders: list) -> Optional[dict]:
         """Place a basket of equity orders."""
         try:
-            if config.PAPER_TRADING:
-                sim = self._simulate_response({'orders': orders})
-                logger.info(f"📄 PAPER BASKET ORDER: {orders}")
-                return sim
             if not self.client:
                 logger.error("OpenAlgo client not initialized")
                 return None
@@ -382,10 +331,6 @@ class OrderManager:
                 'price_type': price_type,
                 'product': product
             }
-            if config.PAPER_TRADING:
-                sim = self._simulate_response(payload)
-                logger.info(f"📄 PAPER SPLIT ORDER: {payload}")
-                return sim
             if not self.client:
                 logger.error("OpenAlgo client not initialized")
                 return None

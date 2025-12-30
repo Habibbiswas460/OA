@@ -1,0 +1,3 @@
+{"timestamp": "2025-12-30T12:57:36.288558", "type": "SESSION_START", "data": {"session_id": "session_20251230_125736", "timestamp": "2025-12-30T12:57:36.288178"}}
+{"timestamp": "2025-12-30T12:57:36.789059", "type": "STRATEGY_INIT", "data": {"mode": "PAPER", "symbol": "NIFTY", "max_daily_loss": 3000}}
+{"timestamp": "2025-12-30T12:57:44.388778", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25896.5, "delta": -0.5195}}

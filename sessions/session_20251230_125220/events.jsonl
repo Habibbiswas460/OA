@@ -1,0 +1,23 @@
+{"timestamp": "2025-12-30T12:52:20.953319", "type": "SESSION_START", "data": {"session_id": "session_20251230_125220", "timestamp": "2025-12-30T12:52:20.953023"}}
+{"timestamp": "2025-12-30T12:52:21.453730", "type": "STRATEGY_INIT", "data": {"mode": "PAPER", "symbol": "NIFTY", "max_daily_loss": 3000}}
+{"timestamp": "2025-12-30T12:52:28.701315", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25895.45, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:29.714282", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25896.55, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:30.724122", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25897.6, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:31.733497", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25899.0, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:32.747206", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25897.75, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:33.764429", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25897.2, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:34.775927", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.8, "delta": -0.5315}}
+{"timestamp": "2025-12-30T12:52:35.793533", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.8, "delta": -0.5082}}
+{"timestamp": "2025-12-30T12:52:36.811322", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25897.6, "delta": -0.5082}}
+{"timestamp": "2025-12-30T12:52:37.822819", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25897.55, "delta": -0.5082}}
+{"timestamp": "2025-12-30T12:52:38.834862", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25896.9, "delta": -0.5082}}
+{"timestamp": "2025-12-30T12:52:39.843603", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.4, "delta": -0.5082}}
+{"timestamp": "2025-12-30T12:52:40.854234", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.4, "delta": -0.5082}}
+{"timestamp": "2025-12-30T12:52:41.867799", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.4, "delta": -0.5117}}
+{"timestamp": "2025-12-30T12:52:42.882786", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.3, "delta": -0.5117}}
+{"timestamp": "2025-12-30T12:52:43.893420", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.1, "delta": -0.5117}}
+{"timestamp": "2025-12-30T12:52:44.903505", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.35, "delta": -0.5117}}
+{"timestamp": "2025-12-30T12:52:45.913978", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25898.95, "delta": -0.5117}}
+{"timestamp": "2025-12-30T12:52:46.923921", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25899.75, "delta": -0.5117}}
+{"timestamp": "2025-12-30T12:52:47.938716", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25899.45, "delta": -0.5014}}
+{"timestamp": "2025-12-30T12:52:48.943717", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25900.3, "delta": -0.5014}}

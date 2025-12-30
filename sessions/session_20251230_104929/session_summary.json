@@ -1,0 +1,39 @@
+{
+  "session_id": "session_20251230_104929",
+  "start_time": "2025-12-30T10:49:29.692066",
+  "end_time": "2025-12-30T10:50:40.707093",
+  "status": "ENDED",
+  "mode": "PAPER",
+  "events": [
+    {
+      "timestamp": "2025-12-30T10:49:29.692268",
+      "type": "SESSION_START",
+      "data": {
+        "session_id": "session_20251230_104929",
+        "timestamp": "2025-12-30T10:49:29.692066"
+      }
+    },
+    {
+      "timestamp": "2025-12-30T10:49:30.192580",
+      "type": "STRATEGY_INIT",
+      "data": {
+        "mode": "PAPER",
+        "symbol": "NIFTY",
+        "max_daily_loss": 3000
+      }
+    }
+  ],
+  "trades": [],
+  "metrics": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0,
+    "max_drawdown": 0,
+    "greeks_api_calls": 10,
+    "cache_hit_rate": 0.0
+  },
+  "errors": [],
+  "warnings": [],
+  "duration_seconds": 71.015051
+}

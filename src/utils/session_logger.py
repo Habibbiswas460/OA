@@ -97,64 +97,51 @@ class SessionLogger:
         self.logger.addHandler(fh)
     
     def log_event(self, event_type: str, data: Dict[str, Any]):
-        """
-        Log an event to the session
-        
-        Args:
-            event_type: Type of event (e.g., TRADE_ENTRY, SIGNAL_DETECTED)
-            data: Event data dictionary
-        """
-        with self.lock:
-            event = {
-                'timestamp': datetime.now().isoformat(),
-                'type': event_type,
-                'data': data
-            }
-            
-            # Add to session data
-            self.session_data['events'].append(event)
-            
-            # Write to events log (JSONL format)
-            with open(self.events_log_file, 'a') as f:
-                f.write(json.dumps(event) + '\n')
-            
-            # Log to session log
-            self.logger.info(f"{event_type}: {json.dumps(data)}")
+        """Log an event to the session (non-blocking, resilient)."""
+        try:
+            if not self.lock.acquire(timeout=0.5):
+                return
+            try:
+                event = {
+                    'timestamp': datetime.now().isoformat(),
+                    'type': event_type,
+                    'data': data
+                }
+                self.session_data['events'].append(event)
+                with open(self.events_log_file, 'a') as f:
+                    f.write(json.dumps(event) + '\n')
+                self.logger.info(f"{event_type}: {json.dumps(data)}")
+            finally:
+                self.lock.release()
+        except KeyboardInterrupt:
+            return
     
     def log_trade(self, trade_data: Dict[str, Any]):
-        """
-        Log a trade to the session
-        
-        Args:
-            trade_data: Trade information dictionary
-        """
-        with self.lock:
-            trade = {
-                'timestamp': datetime.now().isoformat(),
-                **trade_data
-            }
-            
-            # Add to session data
-            self.session_data['trades'].append(trade)
-            
-            # Update metrics
-            self.session_data['metrics']['total_trades'] += 1
-            
-            if 'pnl' in trade_data:
-                pnl = float(trade_data['pnl'])
-                self.session_data['metrics']['total_pnl'] += pnl
-                
-                if pnl > 0:
-                    self.session_data['metrics']['wins'] += 1
-                elif pnl < 0:
-                    self.session_data['metrics']['losses'] += 1
-            
-            # Write to trades log (JSONL format)
-            with open(self.trades_log_file, 'a') as f:
-                f.write(json.dumps(trade) + '\n')
-            
-            # Log to session log
-            self.logger.info(f"TRADE: {json.dumps(trade_data)}")
+        """Log a trade to the session (non-blocking, resilient)."""
+        try:
+            if not self.lock.acquire(timeout=0.5):
+                return
+            try:
+                trade = {
+                    'timestamp': datetime.now().isoformat(),
+                    **trade_data
+                }
+                self.session_data['trades'].append(trade)
+                self.session_data['metrics']['total_trades'] += 1
+                if 'pnl' in trade_data:
+                    pnl = float(trade_data['pnl'])
+                    self.session_data['metrics']['total_pnl'] += pnl
+                    if pnl > 0:
+                        self.session_data['metrics']['wins'] += 1
+                    elif pnl < 0:
+                        self.session_data['metrics']['losses'] += 1
+                with open(self.trades_log_file, 'a') as f:
+                    f.write(json.dumps(trade) + '\n')
+                self.logger.info(f"TRADE: {json.dumps(trade_data)}")
+            finally:
+                self.lock.release()
+        except KeyboardInterrupt:
+            return
     
     def log_error(self, error_type: str, error_msg: str, details: Dict = None):
         """

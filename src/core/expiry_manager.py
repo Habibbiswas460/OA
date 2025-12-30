@@ -417,7 +417,7 @@ class ExpiryManager:
             underlying: NIFTY or BANKNIFTY (defaults to current underlying)
         
         Returns:
-            Option symbol string (e.g., "NIFTY18800CE30DEC2025")
+            Option symbol string (e.g., "NIFTY30DEC2525900CE")
         """
         if underlying is None:
             underlying = self.selected_underlying
@@ -426,10 +426,10 @@ class ExpiryManager:
             logger.warning("No expiry selected, cannot build symbol")
             return ""
         
-        # Format: UNDERLYING + STRIKE + TYPE + EXPIRYDATE
-        # Example: NIFTY18800CE30DEC2025
+        # Format: UNDERLYING + EXPIRYDATE + STRIKE + TYPE
+        # Example: NIFTY30DEC2525900CE
         
-        symbol = f"{underlying}{strike}{option_type}{self.current_expiry.expiry_date}"
+        symbol = f"{underlying}{self.current_expiry.expiry_date}{strike}{option_type}"
         logger.log_order({'type': 'SYMBOL_BUILT_MANUAL', 'symbol': symbol})
         return symbol
 

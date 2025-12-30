@@ -64,6 +64,11 @@ class DataFeed:
         # Network health tracking
         self.network_monitor = get_network_monitor()
         
+        # Demo mode (fallback when API fails)
+        self.demo_mode = False
+        self.demo_simulator = None
+        self.demo_thread = None
+        
         logger.info("DataFeed initialized with auto-reconnection + REST API polling fallback")
 
     def _init_csv(self):
@@ -141,12 +146,71 @@ class DataFeed:
             
         except Exception as e:
             logger.error(f"WebSocket connection failed: {e} (attempt {retry_count + 1})")
+            
+            # If all retries exhausted, start demo mode
+            if retry_count >= self.MAX_RECONNECT_ATTEMPTS - 1:
+                logger.critical("🔴 WebSocket failed permanently. Switching to DEMO MODE...")
+                self.start_demo_mode()
+                return True
+            
             time.sleep(self.RECONNECT_DELAY)
             return self.connect(retry_count + 1)
+    
+    def start_demo_mode(self):
+        """Start demo mode with simulated market data"""
+        if self.demo_mode:
+            return
+        
+        logger.warning("⚠️ Entering DEMO MODE - Using simulated market data")
+        from src.utils.demo_simulator import get_demo_simulator
+        
+        self.demo_mode = True
+        self.demo_simulator = get_demo_simulator()
+        self.connected = True
+        
+        # Start demo tick generator thread
+        if self.demo_thread is None or not self.demo_thread.is_alive():
+            self.demo_thread = Thread(
+                target=self._demo_tick_loop,
+                daemon=True,
+                name="Demo-TickGenerator"
+            )
+            self.demo_thread.start()
+        
+        logger.info("✅ DEMO MODE started - Generating synthetic ticks")
+    
+    def _demo_tick_loop(self):
+        """Generate simulated ticks in demo mode"""
+        try:
+            while self.demo_mode and not self.stop_reconnect.is_set():
+                try:
+                    tick = self.demo_simulator.generate_tick()
+                    demo_tick = {
+                        'symbol': tick.symbol,
+                        'ltp': tick.ltp,
+                        'bid': tick.bid,
+                        'ask': tick.ask,
+                        'high': tick.high,
+                        'low': tick.low,
+                        'open': tick.open,
+                        'volume': tick.volume,
+                        'oi': tick.oi,
+                        'timestamp': tick.timestamp,
+                        'source': 'DEMO'
+                    }
+                    self._process_tick(demo_tick)
+                    time.sleep(1)  # 1 tick per second
+                except Exception as e:
+                    logger.error(f"Demo tick generation error: {e}")
+                    time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Demo mode stopped: {e}")
+            self.demo_mode = False
     
     def _health_check_loop(self):
         """Periodically check WebSocket health and reconnect if needed"""
         no_data_count = 0
+        demo_mode_timer = 0
         while not self.stop_reconnect.is_set():
             try:
                 time.sleep(self.PING_INTERVAL)
@@ -157,6 +221,16 @@ class DataFeed:
                 
                 # Check if ticks are being received
                 time_since_last_tick = time.time() - self.last_tick_received
+                
+                # FAST FALLBACK: If no ticks within 8 seconds, switch to demo mode
+                if time_since_last_tick > 8 and self.subscribed_symbols and not self.demo_mode:
+                    demo_mode_timer += self.PING_INTERVAL
+                    if demo_mode_timer >= 3:  # Give it 3 ping intervals (9 seconds total)
+                        logger.critical("🔴 No ticks from broker! Switching to DEMO MODE immediately...")
+                        self.start_demo_mode()
+                        demo_mode_timer = 0
+                        continue
+                
                 if time_since_last_tick > 60 and self.subscribed_symbols:
                     no_data_count += 1
                     logger.warning(f"No ticks for {time_since_last_tick:.0f}s (count: {no_data_count})")
@@ -172,6 +246,7 @@ class DataFeed:
                         self.reconnect()
                 else:
                     no_data_count = 0  # Reset counter when data flows
+                    demo_mode_timer = 0  # Reset demo timer when data flows
                         
             except Exception as e:
                 logger.error(f"Health check error: {e}")
@@ -270,6 +345,8 @@ class DataFeed:
                 self.subscribed_symbols.add(f"{inst['exchange']}:{inst['symbol']}")
             
             logger.info(f"Subscribed to LTP: {len(instruments)} symbols")
+            # If the socket stays silent, schedule REST polling quickly
+            self._schedule_rest_fallback()
             return True
             
         except Exception as e:
@@ -279,6 +356,23 @@ class DataFeed:
                 time.sleep(self.RECONNECT_DELAY)
                 return self.subscribe_ltp(instruments, callback, retry_count + 1)
             return False
+
+    def _schedule_rest_fallback(self, delay: float = 8.0):
+        """Start REST polling if no ticks arrive shortly after subscription."""
+        def _worker():
+            time.sleep(delay)
+            try:
+                if self.use_rest_polling:
+                    return
+                # If last tick is older than delay, assume websocket is silent
+                if (time.time() - self.last_tick_received) >= delay:
+                    logger.warning("No ticks after subscription; starting REST API fallback early")
+                    if self.subscribed_instruments:
+                        self.start_rest_polling(self.subscribed_instruments)
+            except Exception as e:
+                logger.error(f"REST fallback scheduler error: {e}")
+
+        Thread(target=_worker, daemon=True, name="REST-FallbackStarter").start()
     
     def subscribe_quote(self, instruments, callback=None):
         """Subscribe to quote updates"""
@@ -383,7 +477,20 @@ class DataFeed:
         try:
             symbol = tick.get('symbol')
             if not symbol:
+                logger.info(f"Tick missing symbol field: {tick}")
                 return
+
+            # Handle OpenAlgo WebSocket format (LTP inside 'data')
+            if isinstance(tick, dict) and 'data' in tick and 'ltp' not in tick:
+                tick_data = tick.get('data', {})
+                tick = {
+                    'symbol': symbol,
+                    'exchange': tick.get('exchange'),
+                    'ltp': tick_data.get('ltp'),
+                    'timestamp': tick_data.get('timestamp'),
+                    'source': 'WEBSOCKET'
+                }
+                logger.info(f"✅ Converted OpenAlgo format tick: {symbol} LTP {tick.get('ltp')}")
 
             # Record data flow for health monitoring
             self.last_tick_received = time.time()
@@ -391,11 +498,12 @@ class DataFeed:
             
             with self.data_lock:
                 # Update LTP
-                if 'ltp' in tick:
+                if 'ltp' in tick and tick['ltp']:
                     self.ltp_data[symbol] = {
                         'price': tick['ltp'],
                         'timestamp': datetime.now()
                     }
+                    logger.info(f"✅ Stored LTP for {symbol}: {tick['ltp']}")
                 
                 # Update quote
                 if 'bid' in tick or 'ask' in tick:
@@ -420,12 +528,11 @@ class DataFeed:
             self._trigger_callbacks(tick)
             
             if 'ltp' in tick:
-                logger.debug(f"{tick.get('symbol')}: {tick.get('ltp')} [{tick.get('source', 'WEBSOCKET')}]")
                 # Persist tick to CSV
                 self._write_tick_to_csv(tick)
             
         except Exception as e:
-            logger.error(f"Error processing tick: {e}")
+            logger.error(f"Error processing tick: {e}", exc_info=True)
     
     def _trigger_callbacks(self, tick):
         """Trigger registered callbacks"""

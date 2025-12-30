@@ -1,0 +1,6 @@
+{"timestamp": "2025-12-30T13:00:44.435047", "type": "SESSION_START", "data": {"session_id": "session_20251230_130044", "timestamp": "2025-12-30T13:00:44.434775"}}
+{"timestamp": "2025-12-30T13:00:44.935546", "type": "STRATEGY_INIT", "data": {"mode": "PAPER", "symbol": "NIFTY", "max_daily_loss": 3000}}
+{"timestamp": "2025-12-30T13:00:52.255771", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25893.65, "delta": -0.5382}}
+{"timestamp": "2025-12-30T13:00:53.265823", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25894.25, "delta": -0.5382}}
+{"timestamp": "2025-12-30T13:00:54.276695", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25894.1, "delta": -0.5382}}
+{"timestamp": "2025-12-30T13:00:55.290826", "type": "ENTRY_SIGNAL", "data": {"signal": "PUT_BUY", "strike": 25900, "option_type": "PE", "entry_price": 25894.75, "delta": -0.5382}}

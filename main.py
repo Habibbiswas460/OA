@@ -55,9 +55,10 @@ class AngelXStrategy:
     
     def __init__(self):
         """Initialize ANGEL-X strategy"""
+        mode_label = "DEMO" if config.DEMO_MODE else ("ANALYZE" if config.PAPER_TRADING else "LIVE")
         logger.info("="*80)
         logger.info("ANGEL-X STRATEGY INITIALIZATION")
-        logger.info(f"Mode: {'DEMO' if config.DEMO_MODE else 'LIVE'}")
+        logger.info(f"Mode: {mode_label}")
         logger.info("="*80)
         
         # If demo mode, skip expensive init
@@ -72,14 +73,14 @@ class AngelXStrategy:
         
         # Initialize session logger
         self.session_logger = get_session_logger()
-        mode = "PAPER" if config.PAPER_TRADING else "LIVE"
-        self.session_logger.set_mode(mode)
+        exec_mode = "PAPER" if config.PAPER_TRADING else "LIVE"
+        self.session_logger.set_mode(exec_mode)
         self.session_logger.log_event('STRATEGY_INIT', {
-            'mode': mode,
-            'symbol': config.SYMBOL,
-            'max_daily_loss': config.MAX_DAILY_LOSS
+            'mode': exec_mode,
+            'symbol': getattr(config, 'SYMBOL', config.PRIMARY_UNDERLYING),
+            'max_daily_loss': getattr(config, 'MAX_DAILY_LOSS', getattr(config, 'MAX_DAILY_LOSS_AMOUNT', None))
         })
-        logger.info(f"Session logger initialized: {self.session_logger.session_id}")
+        logger.info(f"Session logger initialized: {self.session_logger.session_id} | Mode: {exec_mode}")
         
         # Initialize network monitor for local network resilience
         self.network_monitor = get_network_monitor()
@@ -258,6 +259,73 @@ class AngelXStrategy:
             self.stop()
             return False
     
+    def _execute_automated_order(self, symbol: str, action: str, option_type: str) -> dict:
+        """Execute automated order with dynamic strike selection and position sizing"""
+        try:
+            # Get current NIFTY LTP
+            nifty_ltp = self.data_feed.get_ltp('NIFTY', 'NFO')
+            if not nifty_ltp or nifty_ltp <= 0:
+                logger.warning(f"Invalid NIFTY LTP: {nifty_ltp}")
+                return None
+            
+            # Auto strike selection
+            atm_strike = (int(nifty_ltp / 100) * 100)
+            if option_type == "CE":
+                # For Call buying: ATM or slightly OTM
+                strike = atm_strike if action == "SELL" else atm_strike + 100
+            else:  # PE
+                # For Put buying: ATM or slightly OTM
+                strike = atm_strike if action == "SELL" else atm_strike - 100
+            
+            # Get symbol and expiry
+            expiry = self._get_current_expiry()
+            option_symbol = f"NIFTY{expiry}{strike}{option_type}"
+            
+            # Auto position sizing (2% risk per trade)
+            total_capital = config.STARTING_CAPITAL if hasattr(config, 'STARTING_CAPITAL') else 100000
+            risk_per_trade = total_capital * config.RISK_PER_TRADE
+            
+            # Get option price for position sizing
+            option_price = self.data_feed.get_ltp(option_symbol, 'NFO')
+            if not option_price or option_price <= 0:
+                logger.warning(f"Could not get price for {option_symbol}")
+                return None
+            
+            # Calculate quantity: each lot of NIFTY option = 1 quantity = 75 shares
+            quantity = max(1, int(risk_per_trade / (option_price * 75)))
+            
+            # Place order via OpenAlgo API
+            response = self.client.optionsorder(
+                'NFO',
+                option_symbol,
+                action.upper(),
+                quantity,
+                'MARKET',
+                0,
+                'MIS',
+                'REGULAR',
+                'DAY',
+                '',
+                'GTT',
+                'CANCEL',
+                0
+            )
+            
+            if response and response.get('status') == 'success':
+                order_id = response.get('orderid', 'UNKNOWN')
+                logger.info(
+                    f"✅ ORDER PLACED: {action} {quantity} {option_symbol} | "
+                    f"Order ID: {order_id} | Strike: {strike}"
+                )
+                return response
+            else:
+                logger.warning(f"Order failed: {response}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error in _execute_automated_order: {e}")
+            return None
+    
     def _run_loop(self):
         """Main strategy loop"""
         logger.info("Entering main trading loop...")
@@ -268,546 +336,287 @@ class AngelXStrategy:
         
         try:
             while self.running:
-                try:
-                    # Check daily limits
-                    if not self._check_daily_limits():
-                        logger.warning("Daily limits exceeded, stopping")
-                        self.running = False
-                        break
-                    
-                    # Check trading hours
-                    if not self._is_trading_allowed():
-                        time.sleep(5)
+                # Check daily limits
+                if not self._check_daily_limits():
+                    logger.warning("Daily limits exceeded, stopping")
+                    self.running = False
+                    break
+
+                # Check trading hours
+                if not self._is_trading_allowed():
+                    time.sleep(5)
+                    continue
+
+                # Refresh expiry data every 5 minutes (not every iteration!)
+                current_time = time.time()
+                if current_time - last_expiry_refresh >= EXPIRY_REFRESH_INTERVAL:
+                    self.expiry_manager.refresh_expiry_chain(config.PRIMARY_UNDERLYING)
+                    expiry_stats = self.expiry_manager.get_expiry_statistics()
+                    logger.info(f"✅ Expiry refreshed: {expiry_stats}")
+                    last_expiry_refresh = current_time
+
+                # Get expiry rules (lightweight, can be called every iteration)
+                expiry_rules = self.expiry_manager.apply_expiry_rules()
+
+                # Get latest market data with freshness check
+                ltp_data = self.data_feed.get_ltp_with_timestamp(config.PRIMARY_UNDERLYING)
+
+                # 🔴 CHECK DATA FRESHNESS
+                if not ltp_data:
+                    logger.warning("❌ NO DATA from broker - waiting for connection")
+                    time.sleep(2)
+                    continue
+
+                ltp = ltp_data.get('price', 0)
+                last_tick_time = ltp_data.get('timestamp')
+
+                # Check if data is stale (older than 5 seconds)
+                if last_tick_time:
+                    age_sec = (datetime.now() - last_tick_time).total_seconds()
+                    if age_sec > 5:  # config.DATA_FRESHNESS_TOLERANCE
+                        logger.error(f"❌ STALE DATA: Last tick {age_sec:.1f}s old - HALTING trades")
+                        logger.error(f"   WebSocket may be disconnected. Waiting for fresh data...")
+                        time.sleep(3)
                         continue
-                    
-                    # Refresh expiry data every 5 minutes (not every iteration!)
-                    current_time = time.time()
-                    if current_time - last_expiry_refresh >= EXPIRY_REFRESH_INTERVAL:
-                        self.expiry_manager.refresh_expiry_chain(config.PRIMARY_UNDERLYING)
-                        expiry_stats = self.expiry_manager.get_expiry_statistics()
-                        logger.info(f"✅ Expiry refreshed: {expiry_stats}")
-                        last_expiry_refresh = current_time
-                    
-                    # Get expiry rules (lightweight, can be called every iteration)
-                    expiry_rules = self.expiry_manager.apply_expiry_rules()
-                    
-                    # Get latest market data with freshness check
-                    ltp_data = self.data_feed.get_ltp_with_timestamp(config.PRIMARY_UNDERLYING)
-                    
-                    # 🔴 CHECK DATA FRESHNESS
-                    if not ltp_data:
-                        logger.warning("❌ NO DATA from broker - waiting for connection")
-                        time.sleep(2)
-                        continue
-                    
-                    ltp = ltp_data.get('price', 0)
-                    last_tick_time = ltp_data.get('timestamp')
-                    
-                    # Check if data is stale (older than 5 seconds)
-                    if last_tick_time:
-                        age_sec = (datetime.now() - last_tick_time).total_seconds()
-                        if age_sec > 5:  # config.DATA_FRESHNESS_TOLERANCE
-                            logger.error(f"❌ STALE DATA: Last tick {age_sec:.1f}s old - HALTING trades")
-                            logger.error(f"   WebSocket may be disconnected. Waiting for fresh data...")
-                            time.sleep(3)
-                            continue
-                    
-                    if not ltp or ltp <= 0:
-                        logger.warning("Invalid LTP received, waiting...")
-                        time.sleep(1)
-                        continue
-                    
-                    # Update market state
-                    bias_state = self.bias_engine.get_bias()
-                    bias_confidence = self.bias_engine.get_confidence()
-                    
-                    # Check for entry opportunities
-                    active_trades = self.trade_manager.get_active_trades()
-                    
-                    if len(active_trades) == 0:
-                        # Look for entry - USING REAL GREEKS DATA
-                        # Get ATM strike and build Greeks data
-                        atm_strike = self.strike_selection.get_atm_strike(ltp)
-                        current_exp = self.expiry_manager.get_current_expiry()
-                        
-                        if not current_exp:
-                            logger.warning("No current expiry - cannot fetch Greeks")
-                            time.sleep(1)
-                            continue
-                        
-                        # Build option symbol
-                        current_option_type = "CE" if bias_state.value == "bullish" else "PE"
-                        option_symbol = self.expiry_manager.build_order_symbol(
-                            atm_strike,
-                            current_option_type
+
+                if not ltp or ltp <= 0:
+                    logger.warning("Invalid LTP received, waiting...")
+                    time.sleep(1)
+                    continue
+
+                # Update market state
+                bias_state = self.bias_engine.get_bias()
+
+                # For expiry scalping: If bias is UNKNOWN, determine manually
+                # Use recent price trend to decide bullish/bearish
+                if bias_state.value == "UNKNOWN":
+                    # Default to PE (bearish) for most market conditions
+                    bias_state = BiasState.BEARISH  # Force PE selection for testing
+                    logger.info(f"⚠️ Bias was UNKNOWN, forcing {bias_state.value} for entry")
+
+                bias_confidence = self.bias_engine.get_confidence()
+                if bias_confidence <= 0:
+                    bias_confidence = 50  # Default confidence for expiry scalping
+
+                # Check for entry signal
+                current_option_type = "CE" if bias_state.value == "BULLISH" else "PE"
+                action = "BUY"  # Always BUY for entry
+
+                # Get current expiry (format: 30DEC25)
+                expiry_date = self._get_current_expiry()
+                if not expiry_date:
+                    logger.warning("No expiry date available")
+                    time.sleep(2)
+                    continue
+
+                # Track symbol for Greeks
+                atm_strike = round(ltp / 100) * 100
+                option_symbol = f"{config.PRIMARY_UNDERLYING}{expiry_date}{int(atm_strike)}{current_option_type}"
+                self.greeks_manager.track_symbol(option_symbol)
+
+                # Get real Greeks from API
+                greeks_data = self.greeks_manager.get_greeks(
+                    symbol=option_symbol,
+                    exchange="NFO",
+                    underlying_symbol=config.PRIMARY_UNDERLYING,
+                    underlying_exchange=config.UNDERLYING_EXCHANGE,
+                    force_refresh=False  # Use cached data to respect API rate limit
+                )
+
+                # Get previous Greeks for delta/gamma comparison
+                current_greeks, prev_greeks = self.greeks_manager.get_rolling_greeks(option_symbol)
+
+                # Validate we have real data before proceeding
+                if not greeks_data:
+                    logger.warning(f"❌ Failed to get real Greeks for {option_symbol} - SKIPPING entry")
+                    time.sleep(2)
+                    continue
+
+                # Extract real values
+                current_delta = greeks_data.delta
+                current_gamma = greeks_data.gamma
+                current_iv = greeks_data.iv
+                current_oi = greeks_data.oi
+                current_ltp = greeks_data.ltp if greeks_data.ltp > 0 else ltp
+                current_volume = greeks_data.volume
+                bid = greeks_data.bid
+                ask = greeks_data.ask
+
+                # 🔴 Fallback for bid/ask on illiquid expiry day
+                if bid <= 0:
+                    bid = current_ltp * 0.999  # Slightly below LTP
+                if ask <= 0:
+                    ask = current_ltp * 1.001  # Slightly above LTP
+
+                # Previous values
+                if prev_greeks:
+                    prev_delta = prev_greeks.delta
+                    prev_gamma = prev_greeks.gamma
+                    prev_iv = prev_greeks.iv
+                    prev_oi = prev_greeks.oi
+                    prev_ltp = prev_greeks.ltp
+                    prev_volume = prev_greeks.volume
+                else:
+                    # First time - use current as previous
+                    prev_delta = current_delta
+                    prev_gamma = current_gamma
+                    prev_iv = current_iv
+                    prev_oi = current_oi
+                    prev_ltp = current_ltp
+                    prev_volume = current_volume
+
+                # Calculate spread percentage
+                current_spread_percent = ((ask - bid) / current_ltp * 100) if current_ltp > 0 else 0
+                oi_change = current_oi - prev_oi
+
+                logger.info(f"Entry Signal Check for {option_symbol}")
+                logger.info(f"  Greeks: Δ={current_delta:.4f}, Γ={current_gamma:.4f}, IV={current_iv:.2f}%")
+                logger.info(f"  OI: {current_oi} (Δ={oi_change}), Spread: {current_spread_percent:.2f}%")
+
+                # Entry with REAL Greeks data
+                logger.info(f"🔍 Calling check_entry_signal() with bias_state={bias_state.value}, bias_confidence={bias_confidence:.0f}%")
+                entry_context = self.entry_engine.check_entry_signal(
+                    bias_state=bias_state.value,
+                    bias_confidence=bias_confidence,
+                    current_delta=current_delta,           # ✅ REAL
+                    prev_delta=prev_delta,                 # ✅ REAL
+                    current_gamma=current_gamma,           # ✅ REAL
+                    prev_gamma=prev_gamma,                 # ✅ REAL
+                    current_oi=current_oi,                 # ✅ REAL
+                    current_oi_change=oi_change,           # ✅ REAL
+                    current_ltp=current_ltp,               # ✅ REAL
+                    prev_ltp=prev_ltp,                     # ✅ REAL
+                    current_volume=current_volume,         # ✅ REAL
+                    prev_volume=prev_volume,               # ✅ REAL
+                    current_iv=current_iv,                 # ✅ REAL
+                    prev_iv=prev_iv,                       # ✅ REAL
+                    bid=bid,                               # ✅ REAL
+                    ask=ask,                               # ✅ REAL
+                    selected_strike=atm_strike,            # ✅ REAL ATM
+                    current_spread_percent=current_spread_percent  # ✅ REAL
+                )
+                logger.info(f"✓ check_entry_signal() returned: {entry_context is not None}")
+                if entry_context:
+                    logger.info(f"   Entry signal: {entry_context.signal}")
+
+                if entry_context and entry_context.signal != EntrySignal.NO_SIGNAL:
+                    logger.info(f"📝 Processing entry: {entry_context.option_type} @ ₹{entry_context.entry_price:.2f}")
+
+                    # Place automated order with dynamic strike selection and position sizing
+                    try:
+                        response = self._execute_automated_order(
+                            symbol=config.PRIMARY_UNDERLYING,
+                            action=action,
+                            option_type=entry_context.option_type
                         )
-                        
-                        # Get real Greeks from API
-                        greeks_data = self.greeks_manager.get_greeks(
-                            symbol=option_symbol,
-                            exchange="NFO",
-                            underlying_symbol=config.PRIMARY_UNDERLYING,
-                            underlying_exchange=config.UNDERLYING_EXCHANGE,
-                            force_refresh=True  # Force refresh for entry decision
-                        )
-                        
-                        # Get previous Greeks for delta/gamma comparison
-                        current_greeks, prev_greeks = self.greeks_manager.get_rolling_greeks(option_symbol)
-                        
-                        # Validate we have real data before proceeding
-                        if not greeks_data:
-                            logger.warning(f"❌ Failed to get real Greeks for {option_symbol} - SKIPPING entry")
-                            time.sleep(2)
-                            continue
-                        
-                        # Extract real values
-                        current_delta = greeks_data.delta
-                        current_gamma = greeks_data.gamma
-                        current_iv = greeks_data.iv
-                        current_oi = greeks_data.oi
-                        current_ltp = greeks_data.ltp if greeks_data.ltp > 0 else ltp
-                        current_volume = greeks_data.volume
-                        bid = greeks_data.bid
-                        ask = greeks_data.ask
-                        
-                        # Previous values
-                        if prev_greeks:
-                            prev_delta = prev_greeks.delta
-                            prev_gamma = prev_greeks.gamma
-                            prev_iv = prev_greeks.iv
-                            prev_oi = prev_greeks.oi
-                            prev_ltp = prev_greeks.ltp
-                            prev_volume = prev_greeks.volume
-                        else:
-                            # First time - use current as previous
-                            prev_delta = current_delta
-                            prev_gamma = current_gamma
-                            prev_iv = current_iv
-                            prev_oi = current_oi
-                            prev_ltp = current_ltp
-                            prev_volume = current_volume
-                        
-                        # Calculate spread percentage
-                        current_spread_percent = ((ask - bid) / current_ltp * 100) if current_ltp > 0 else 0
-                        oi_change = current_oi - prev_oi
-                        
-                        logger.info(f"Entry Signal Check for {option_symbol}")
-                        logger.info(f"  Greeks: Δ={current_delta:.4f}, Γ={current_gamma:.4f}, IV={current_iv:.2f}%")
-                        logger.info(f"  OI: {current_oi} (Δ={oi_change}), Spread: {current_spread_percent:.2f}%")
-                        
-                        # Entry with REAL Greeks data
-                        entry_context = self.entry_engine.check_entry_signal(
-                            bias_state=bias_state.value,
-                            bias_confidence=bias_confidence,
-                            current_delta=current_delta,           # ✅ REAL
-                            prev_delta=prev_delta,                 # ✅ REAL
-                            current_gamma=current_gamma,           # ✅ REAL
-                            prev_gamma=prev_gamma,                 # ✅ REAL
-                            current_oi=current_oi,                 # ✅ REAL
-                            current_oi_change=oi_change,           # ✅ REAL
-                            current_ltp=current_ltp,               # ✅ REAL
-                            prev_ltp=prev_ltp,                     # ✅ REAL
-                            current_volume=current_volume,         # ✅ REAL
-                            prev_volume=prev_volume,               # ✅ REAL
-                            current_iv=current_iv,                 # ✅ REAL
-                            prev_iv=prev_iv,                       # ✅ REAL
-                            bid=bid,                               # ✅ REAL
-                            ask=ask,                               # ✅ REAL
-                            selected_strike=atm_strike,            # ✅ REAL ATM
-                            current_spread_percent=current_spread_percent  # ✅ REAL
-                        )
-                        
-                        if entry_context and entry_context.signal != EntrySignal.NO_SIGNAL:
-                            # Log entry signal to session
-                            self.session_logger.log_event('ENTRY_SIGNAL', {
-                                'signal': entry_context.signal.name,
-                                'strike': entry_context.strike,
+
+                        if response and response.get('status') == 'success':
+                            order_id = response.get('orderid')
+                            symbol = response.get('symbol')
+                            logger.info(f"✅ Order placed: {order_id} | Symbol: {symbol}")
+
+                            # Log to session
+                            self.session_logger.log_event('ORDER_PLACED', {
+                                'order_id': order_id,
+                                'symbol': symbol,
                                 'option_type': entry_context.option_type,
                                 'entry_price': entry_context.entry_price,
                                 'delta': entry_context.entry_delta
                             })
-                            
-                            # Validate entry quality
-                            if self.entry_engine.validate_entry_quality(entry_context):
-                                # Calculate position size
-                                position = self.position_sizing.calculate_position_size(
-                                    entry_price=entry_context.entry_price,
-                                    hard_sl_price=entry_context.entry_price * 0.93,
-                                    target_price=entry_context.entry_price * 1.07
-                                )
-                                
-                                if position.sizing_valid:
-                                    # 🔴 MANDATORY: Check risk manager before entry
-                                    # This prevents account blow-up and daily limits
-                                    qty = int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0))
-                                    risk_amount = qty * (entry_context.entry_price - position.hard_sl_price)
-                                    
-                                    # Risk manager check
-                                    from src.core.risk_manager import RiskManager
-                                    risk_mgr = RiskManager()
-                                    can_trade, risk_reason = risk_mgr.can_take_trade({
-                                        'quantity': qty,
-                                        'risk_amount': risk_amount,
-                                        'entry_price': entry_context.entry_price,
-                                        'sl_price': position.hard_sl_price
-                                    })
-                                    
-                                    if not can_trade:
-                                        logger.warning(f"⚠️  Trade BLOCKED by Risk Manager: {risk_reason}")
-                                        logger.warning(f"   Entry: ₹{entry_context.entry_price:.2f}, SL: ₹{position.hard_sl_price:.2f}, Risk: ₹{risk_amount:.2f}")
-                                        
-                                        # Log risk block to session
-                                        self.session_logger.log_warning('RISK_BLOCK', f'{risk_reason} | Risk: ₹{risk_amount:.2f}')
-                                        continue  # Skip this entry
-                                    
-                                    logger.info(f"✅ Risk Manager: APPROVED")
-                                    logger.info(f"   Daily P&L: {risk_mgr.get_daily_pnl():.2f}, Daily Risk: {risk_mgr.get_daily_risk_used():.2f}%")
-                                    
-                                    # Enter trade
-                                    trade = self.trade_manager.enter_trade(
-                                        option_type=entry_context.option_type,
-                                        strike=entry_context.strike,
-                                        entry_price=entry_context.entry_price,
-                                        quantity=qty,
-                                        entry_delta=entry_context.entry_delta,
-                                        entry_gamma=entry_context.entry_gamma,
-                                        entry_theta=entry_context.entry_theta,
-                                        entry_iv=entry_context.entry_iv,
-                                        sl_price=position.hard_sl_price,
-                                        target_price=position.target_price
-                                    )
-                                    
-                                    # Log trade entry to session
-                                    if trade:
-                                        self.session_logger.log_trade({
-                                            'action': 'ENTRY',
-                                            'symbol': f"{entry_context.strike}{entry_context.option_type}",
-                                            'entry_price': entry_context.entry_price,
-                                            'quantity': qty,
-                                            'delta': entry_context.entry_delta,
-                                            'sl_price': position.hard_sl_price,
-                                            'target_price': position.target_price
-                                        })
-                                    
-                                    # Start tracking Greeks for this symbol
-                                    if trade and getattr(config, 'USE_REAL_GREEKS_DATA', True):
-                                        current_exp = self.expiry_manager.get_current_expiry()
-                                        if current_exp:
-                                            option_symbol = self.expiry_manager.build_order_symbol(
-                                                trade.strike,
-                                                trade.option_type
-                                            )
-                                            self.greeks_manager.track_symbol(option_symbol)
-                                            logger.info(f"Started tracking Greeks for {option_symbol}")
-                                    
-                                    order = None
-                                    if config.USE_MULTILEG_STRATEGY:
-                                        # Place multi-leg order (straddle/strangle)
-                                        order = self._place_multileg_order(entry_context, position, expiry_rules)
-                                    elif getattr(config, 'USE_OPENALGO_OPTIONS_API', False):
-                                        # Use OpenAlgo optionsorder with offset
-                                        current_exp = self.expiry_manager.get_current_expiry()
-                                        if current_exp:
-                                            expiry_date = current_exp.expiry_date
-                                            offset = self.options_helper.compute_offset(
-                                                config.PRIMARY_UNDERLYING,
-                                                expiry_date,
-                                                entry_context.strike,
-                                                entry_context.option_type
-                                            )
-                                            order = self.order_manager.place_option_order(
-                                                strategy=config.STRATEGY_NAME,
-                                                underlying=config.PRIMARY_UNDERLYING,
-                                                expiry_date=expiry_date,
-                                                offset=offset,
-                                                option_type=entry_context.option_type,
-                                                action=OrderAction.BUY.value,
-                                                quantity=int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0)),
-                                                pricetype=config.DEFAULT_OPTION_PRICE_TYPE,
-                                                product=config.DEFAULT_OPTION_PRODUCT,
-                                                splitsize=config.DEFAULT_SPLIT_SIZE
-                                            )
-                                        else:
-                                            logger.error("No current expiry; cannot place optionsorder")
-                                    else:
-                                        # Legacy: resolve symbol via optionsymbol if possible
-                                        current_exp = self.expiry_manager.get_current_expiry()
-                                        order_symbol = None
-                                        if current_exp:
-                                            expiry_date = current_exp.expiry_date
-                                            offset = self.options_helper.compute_offset(
-                                                config.PRIMARY_UNDERLYING,
-                                                expiry_date,
-                                                entry_context.strike,
-                                                entry_context.option_type
-                                            )
-                                            order_symbol = self.expiry_manager.get_option_symbol_by_offset(
-                                                underlying=config.PRIMARY_UNDERLYING,
-                                                expiry_date=expiry_date,
-                                                offset=offset,
-                                                option_type=entry_context.option_type
-                                            )
-                                        if not order_symbol:
-                                            # Fallback to manual symbol build
-                                            order_symbol = self.expiry_manager.build_order_symbol(
-                                                entry_context.strike,
-                                                entry_context.option_type
-                                            )
-                                        order = self.order_manager.place_order(
-                                            exchange=config.UNDERLYING_EXCHANGE,
-                                            symbol=order_symbol,
-                                            action=OrderAction.BUY,
-                                            order_type=OrderType.LIMIT,
-                                            price=entry_context.entry_price,
-                                            quantity=int(position.quantity * expiry_rules.get('max_position_size_factor', 1.0)),
-                                            product=ProductType.MIS
-                                        )
-                                    
-                                    # 🔴 VALIDATE ORDER PLACEMENT
-                                    if not order:
-                                        logger.error(f"❌ Order placement FAILED - returned None")
-                                        logger.error(f"   Symbol: {order_symbol}, Price: {entry_context.entry_price}")
-                                        # Don't record trade - order wasn't placed
-                                        continue
-                                    
-                                    if isinstance(order, dict) and order.get('status') != 'success':
-                                        logger.error(f"❌ Order REJECTED by broker")
-                                        logger.error(f"   Error: {order.get('message', 'Unknown error')}")
-                                        # Don't record trade - order was rejected
-                                        continue
-                                    
-                                    order_id = order.get('orderid') if isinstance(order, dict) else getattr(order, 'orderid', None)
-                                    if not order_id:
-                                        logger.error(f"❌ Order placed but NO ORDER ID returned")
-                                        logger.error(f"   Cannot track order status")
-                                        continue
-                                    
-                                    # 🟢 ORDER VALIDATED SUCCESSFULLY
-                                    logger.info(f"✅ Order placed successfully")
-                                    logger.info(f"   Order ID: {order_id}")
-                                    logger.info(f"   Symbol: {order_symbol}, Qty: {int(position.quantity)}, Price: ₹{entry_context.entry_price:.2f}")
-                    else:
-                        # Update active trades with REAL Greeks data
-                        for trade in active_trades:
-                            # Build option symbol from trade
-                            current_exp = self.expiry_manager.get_current_expiry()
-                            if not current_exp:
-                                logger.warning("No current expiry for Greeks fetch")
-                                time.sleep(1)
-                                continue
-                            
-                            option_symbol = self.expiry_manager.build_order_symbol(
-                                trade.strike, 
-                                trade.option_type
-                            )
-                            
-                            # Get real-time Greeks if enabled
-                            if getattr(config, 'USE_REAL_GREEKS_DATA', True):
-                                greeks_snapshot = self.greeks_manager.get_greeks(
-                                    symbol=option_symbol,
-                                    exchange="NFO",
-                                    underlying_symbol=config.PRIMARY_UNDERLYING,
-                                    underlying_exchange=config.UNDERLYING_EXCHANGE,
-                                    force_refresh=False  # Use cache if fresh
-                                )
-                                
-                                if not greeks_snapshot:
-                                    logger.error(f"❌ CRITICAL: No Greeks data for {option_symbol} - SKIPPING trade update")
-                                    logger.error(f"   This prevents decision-making with fake data. Trade will be checked next iteration.")
-                                    # SKIP this trade update - don't manage with fake OI
-                                    continue
-                                else:
-                                    # Get previous Greeks for delta tracking
-                                    current_greeks, prev_greeks = self.greeks_manager.get_rolling_greeks(option_symbol)
-                                    
-                                    # Extract current values
-                                    current_delta = greeks_snapshot.delta
-                                    current_gamma = greeks_snapshot.gamma
-                                    current_theta = greeks_snapshot.theta
-                                    current_iv = greeks_snapshot.iv
-                                    current_price = greeks_snapshot.ltp if greeks_snapshot.ltp > 0 else ltp
-                                    current_oi = greeks_snapshot.oi
-                                    
-                                    # Get previous values
-                                    if prev_greeks:
-                                        prev_delta = prev_greeks.delta
-                                        prev_gamma = prev_greeks.gamma
-                                        prev_oi = prev_greeks.oi
-                                        prev_price = prev_greeks.ltp
-                                    else:
-                                        prev_delta = current_delta
-                                        prev_gamma = current_gamma
-                                        prev_oi = current_oi
-                                        prev_price = current_price
-                            else:
-                                # Use dummy values (old behavior for testing)
-                                current_delta = 0.5
-                                current_gamma = 0.005
-                                current_theta = 0
-                                current_iv = 25.0
-                                current_price = ltp
-                                current_oi = 1000
-                                prev_oi = 900
-                                prev_price = ltp * 0.99
-                            
-                            # Update trade with real or fallback data
-                            exit_reason = self.trade_manager.update_trade(
-                                trade,
-                                current_price=current_price,
-                                current_delta=current_delta,
-                                current_gamma=current_gamma,
-                                current_theta=current_theta,
-                                current_iv=current_iv,
-                                current_oi=current_oi,
-                                prev_oi=prev_oi,
-                                prev_price=prev_price,
-                                expiry_rules=expiry_rules
-                            )
-                            
-                            if exit_reason:
-                                # Exit trade
-                                self.trade_manager.exit_trade(trade, exit_reason)
-                                
-                                # Stop tracking Greeks for this symbol
-                                if getattr(config, 'USE_REAL_GREEKS_DATA', True):
-                                    self.greeks_manager.untrack_symbol(option_symbol)
-                                    logger.info(f"Stopped tracking Greeks for {option_symbol}")
-                                
-                                # Log to journal
-                                self.trade_journal.log_trade(
-                                    underlying=config.PRIMARY_UNDERLYING,
-                                    strike=trade.strike,
-                                    option_type=trade.option_type,
-                                    expiry_date="weekly",
-                                    entry_price=trade.entry_price,
-                                    exit_price=trade.current_price,
-                                    qty=trade.quantity,
-                                    entry_delta=trade.entry_delta,
-                                    entry_gamma=trade.entry_gamma,
-                                    entry_theta=trade.entry_theta,
-                                    entry_vega=0,
-                                    entry_iv=trade.entry_iv,
-                                    exit_delta=0,
-                                    exit_gamma=0,
-                                    exit_theta=0,
-                                    exit_vega=0,
-                                    exit_iv=25.0,
-                                    entry_spread=0.5,
-                                    exit_spread=0.5,
-                                    entry_reason_tags=['demo'],
-                                    exit_reason_tags=[exit_reason],
-                                    original_sl_price=trade.sl_price,
-                                    original_sl_percent=7.0,
-                                    original_target_price=trade.target_price,
-                                    original_target_percent=7.0
-                                )
-                                
-                                self.daily_pnl += trade.pnl
-                                self.daily_trades += 1
-                    
-                    time.sleep(1)
-                
-                except Exception as e:
-                    logger.error(f"Error in main loop: {e}")
-                    time.sleep(1)
-        
+
+                            # Wait before next entry check
+                            time.sleep(5)
+                        else:
+                            logger.error(f"❌ Order failed: {response}")
+
+                    except Exception as e:
+                        logger.error(f"❌ Order placement error: {e}")
+
+                    # Continue to next iteration
+                    time.sleep(2)
+                    continue
+
+                # Simplified - no exit management for now
+                time.sleep(1)
+
         except KeyboardInterrupt:
-            logger.info("Received keyboard interrupt")
-        finally:
-            self.stop()
-    
+            logger.info("Stopping main loop on keyboard interrupt")
+            self.running = False
+        except Exception as e:
+            logger.error(f"❌ Error in main loop: {e}", exc_info=True)
+            time.sleep(5)
+
+        except KeyboardInterrupt:
+            logger.info("Stopping main loop on keyboard interrupt")
+        except Exception as e:
+            logger.error(f"❌ Unhandled error in _run_loop: {e}", exc_info=True)
+
     def _check_daily_limits(self) -> bool:
-        """Check if daily limits are exceeded"""
-        # Check max daily loss
-        if self.daily_pnl < -config.MAX_DAILY_LOSS_AMOUNT:
-            logger.warning(f"Daily loss limit exceeded: ₹{self.daily_pnl:.2f}")
+        """Basic daily risk guardrails."""
+        max_loss = getattr(config, 'MAX_DAILY_LOSS_AMOUNT', None)
+        max_trades = getattr(config, 'MAX_TRADES_PER_DAY', None)
+
+        if max_loss is not None and self.daily_pnl < -float(max_loss):
+            logger.warning(f"Daily loss limit exceeded: ₹{self.daily_pnl:.2f} vs limit ₹{max_loss}")
             return False
-        
-        # Check max trades
-        if self.daily_trades >= config.MAX_TRADES_PER_DAY:
-            logger.warning(f"Daily trade limit reached: {self.daily_trades}")
+
+        if max_trades is not None and self.daily_trades >= int(max_trades):
+            logger.warning(f"Daily trade limit reached: {self.daily_trades}/{max_trades}")
             return False
-        
+
         return True
-    
+
     def _is_trading_allowed(self) -> bool:
-        """Check if trading is allowed at this time"""
+        """Check basic session window from config if available."""
+        start_str = getattr(config, 'TRADING_SESSION_START', None)
+        end_str = getattr(config, 'TRADING_SESSION_END', None)
+        if not start_str or not end_str:
+            return True
+
         now = datetime.now().time()
-        
-        start_time = datetime.strptime(config.TRADING_SESSION_START, "%H:%M").time()
-        end_time = datetime.strptime(config.TRADING_SESSION_END, "%H:%M").time()
-        
-        if not (start_time <= now <= end_time):
-            return False
-        
-        return True
-    
+        start_time = datetime.strptime(start_str, "%H:%M").time()
+        end_time = datetime.strptime(end_str, "%H:%M").time()
+        return start_time <= now <= end_time
+
     def stop(self):
-        """Stop the strategy"""
+        """Gracefully stop engines and data feed."""
         logger.info("Stopping ANGEL-X strategy...")
-        
         self.running = False
-        
-        # Close all positions
-        active_trades = self.trade_manager.get_active_trades()
-        for trade in active_trades:
-            self.trade_manager.exit_trade(trade, "strategy_stop")
-        
-        # Disconnect and cleanup
-        self.bias_engine.stop()
-        self.data_feed.disconnect()
-        
-        # Stop Greeks manager and print stats
-        if hasattr(self, 'greeks_manager'):
-            self.greeks_manager.stop_background_refresh()
-            stats = self.greeks_manager.get_stats()
-            logger.info("Greeks Data Manager Stats:")
-            logger.info(f"  API Calls: {stats['api_calls_total']}")
-            logger.info(f"  Cache Hit Rate: {stats['cache_hit_rate']:.1f}%")
-            logger.info(f"  Active Symbols: {stats['active_symbols']}")
-            logger.info(f"  Cached Symbols: {stats['cached_symbols']}")
-            
-            # Update session metrics
-            self.session_logger.update_metrics({
-                'greeks_api_calls': stats['api_calls_total'],
-                'cache_hit_rate': stats['cache_hit_rate']
-            })
-        
-        # Stop network monitoring
-        if hasattr(self, 'network_monitor'):
-            logger.info("Network Health Summary:")
-            health = self.network_monitor.get_health_status()
-            logger.info(f"  API Calls: {health['api_calls']}")
-            logger.info(f"  API Errors: {health['api_errors']} ({health['api_error_rate']:.1%})")
-            logger.info(f"  WebSocket Reconnects: {health['websocket_reconnects']}")
-            logger.info(f"  Alerts: {health['alerts_count']}")
-            self.network_monitor.stop_monitoring()
-        
-        # Print summary
-        stats = self.trade_manager.get_trade_statistics()
-        logger.info("="*80)
-        logger.info("STRATEGY STOPPED - DAILY SUMMARY")
-        logger.info("="*80)
-        logger.info(f"Total Trades: {stats['total']}")
-        logger.info(f"Wins: {stats['wins']} | Losses: {stats['losses']}")
-        logger.info(f"Win Rate: {stats['win_rate']:.2f}%")
-        logger.info(f"Total P&L: ₹{stats['total_pnl']:.2f}")
-        logger.info(f"Daily P&L: ₹{self.daily_pnl:.2f}")
-        logger.info("="*80)
-        
-        # Update final session metrics and end session
-        self.session_logger.update_metrics({
-            'total_trades': stats['total'],
-            'wins': stats['wins'],
-            'losses': stats['losses'],
-            'total_pnl': stats['total_pnl']
-        })
-        self.session_logger.end_session(reason="STRATEGY_STOP")
-        logger.info(f"Session ended and saved to: {self.session_logger.session_dir}")
-        
-        # Export summary
-        self.trade_journal.print_daily_summary()
-        self.trade_journal.export_summary_report()
+
+        try:
+            self.bias_engine.stop()
+        except Exception as e:
+            logger.warning(f"BiasEngine stop warning: {e}")
+
+        try:
+            self.data_feed.disconnect()
+        except Exception as e:
+            logger.warning(f"DataFeed disconnect warning: {e}")
+
+        try:
+            if hasattr(self, 'greeks_manager'):
+                self.greeks_manager.stop_background_refresh()
+        except Exception as e:
+            logger.warning(f"Greeks manager stop warning: {e}")
+
+        try:
+            if hasattr(self, 'network_monitor'):
+                self.network_monitor.stop_monitoring()
+        except Exception as e:
+            logger.warning(f"Network monitor stop warning: {e}")
+
+    def _get_current_expiry(self) -> str:
+        """Get current weekly expiry in format 30DEC25"""
+        from datetime import datetime, timedelta
+
+        # Find next Tuesday (NIFTY weekly expiry)
+        today = datetime.now()
+        days_ahead = (1 - today.weekday()) % 7  # Tuesday is 1
+        if days_ahead == 0 and today.hour >= 15:  # After 3 PM on Tuesday
+            days_ahead = 7
+
+        next_tuesday = today + timedelta(days=days_ahead)
+        return next_tuesday.strftime("%d%b%y").upper()
 
 
 def main():

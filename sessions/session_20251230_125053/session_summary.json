@@ -1,0 +1,292 @@
+{
+  "session_id": "session_20251230_125053",
+  "start_time": "2025-12-30T12:50:53.334794",
+  "end_time": "2025-12-30T12:52:03.841799",
+  "status": "ENDED",
+  "mode": "PAPER",
+  "events": [
+    {
+      "timestamp": "2025-12-30T12:50:53.335081",
+      "type": "SESSION_START",
+      "data": {
+        "session_id": "session_20251230_125053",
+        "timestamp": "2025-12-30T12:50:53.334794"
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:50:53.835537",
+      "type": "STRATEGY_INIT",
+      "data": {
+        "mode": "PAPER",
+        "symbol": "NIFTY",
+        "max_daily_loss": 3000
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:14.236322",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25906.3,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:15.246209",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25907.6,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:16.256044",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25907.1,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:17.266585",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25907.1,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:18.276819",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25904.45,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:19.288004",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25904.9,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:20.299057",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25905.2,
+        "delta": -0.4508
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:21.311062",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25905.2,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:22.320963",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25905.2,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:23.324466",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25904.45,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:24.335771",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25904.95,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:25.346624",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.95,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:26.358069",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25904.75,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:27.368940",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.7,
+        "delta": -0.469
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:28.384156",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.9,
+        "delta": -0.469
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:29.395339",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.9,
+        "delta": -0.469
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:30.410378",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.5,
+        "delta": -0.469
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:31.462195",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.75,
+        "delta": -0.469
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:32.471463",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.9,
+        "delta": -0.469
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:33.479970",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.7,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:34.489199",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25902.75,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:35.502929",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25903.1,
+        "delta": -0.4687
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:51:36.516634",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25904.4,
+        "delta": -0.4687
+      }
+    }
+  ],
+  "trades": [],
+  "metrics": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0,
+    "max_drawdown": 0,
+    "greeks_api_calls": 10,
+    "cache_hit_rate": 97.43589743589743
+  },
+  "errors": [],
+  "warnings": [],
+  "duration_seconds": 70.507036
+}

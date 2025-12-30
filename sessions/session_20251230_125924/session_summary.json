@@ -1,0 +1,105 @@
+{
+  "session_id": "session_20251230_125924",
+  "start_time": "2025-12-30T12:59:24.664586",
+  "end_time": "2025-12-30T13:00:35.171645",
+  "status": "ENDED",
+  "mode": "PAPER",
+  "events": [
+    {
+      "timestamp": "2025-12-30T12:59:24.665034",
+      "type": "SESSION_START",
+      "data": {
+        "session_id": "session_20251230_125924",
+        "timestamp": "2025-12-30T12:59:24.664586"
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:25.165507",
+      "type": "STRATEGY_INIT",
+      "data": {
+        "mode": "PAPER",
+        "symbol": "NIFTY",
+        "max_daily_loss": 3000
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:33.503542",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25892.6,
+        "delta": -0.5641
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:34.515750",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25892.65,
+        "delta": -0.5641
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:35.525624",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25892.9,
+        "delta": -0.5641
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:36.538572",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25893.9,
+        "delta": -0.5641
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:37.550240",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25891.1,
+        "delta": -0.5641
+      }
+    },
+    {
+      "timestamp": "2025-12-30T12:59:38.559874",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25891.65,
+        "delta": -0.5641
+      }
+    }
+  ],
+  "trades": [],
+  "metrics": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0,
+    "max_drawdown": 0,
+    "greeks_api_calls": 10,
+    "cache_hit_rate": 90.0
+  },
+  "errors": [],
+  "warnings": [],
+  "duration_seconds": 70.507094
+}

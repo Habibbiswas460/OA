@@ -1,0 +1,171 @@
+{
+  "session_id": "session_20251230_131100",
+  "start_time": "2025-12-30T13:11:00.920729",
+  "end_time": "2025-12-30T13:12:11.424198",
+  "status": "ENDED",
+  "mode": "PAPER",
+  "events": [
+    {
+      "timestamp": "2025-12-30T13:11:00.921106",
+      "type": "SESSION_START",
+      "data": {
+        "session_id": "session_20251230_131100",
+        "timestamp": "2025-12-30T13:11:00.920729"
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:01.421479",
+      "type": "STRATEGY_INIT",
+      "data": {
+        "mode": "PAPER",
+        "symbol": "NIFTY",
+        "max_daily_loss": 3000
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:08.739132",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25884.2,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:09.744008",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25884.7,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:10.749041",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25883.95,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:11.753023",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25883.55,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:12.756440",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25883.5,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:13.760870",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25883.15,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:14.764446",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25882.45,
+        "delta": -0.6188
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:15.767708",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25884.65,
+        "delta": -0.6237
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:16.770866",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25882.75,
+        "delta": -0.6237
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:17.775875",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25882.65,
+        "delta": -0.6237
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:18.781108",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25882.25,
+        "delta": -0.6237
+      }
+    },
+    {
+      "timestamp": "2025-12-30T13:11:19.784479",
+      "type": "ENTRY_SIGNAL",
+      "data": {
+        "signal": "PUT_BUY",
+        "strike": 25900,
+        "option_type": "PE",
+        "entry_price": 25882.55,
+        "delta": -0.6237
+      }
+    }
+  ],
+  "trades": [],
+  "metrics": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0,
+    "max_drawdown": 0,
+    "greeks_api_calls": 10,
+    "cache_hit_rate": 93.33333333333333
+  },
+  "errors": [],
+  "warnings": [],
+  "duration_seconds": 70.503481
+}
